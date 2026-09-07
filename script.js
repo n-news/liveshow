@@ -13,7 +13,7 @@ const SUPABASE_URL =
     "https://aweburrixtbmdwuysrnk.supabase.co";
 
 const SUPABASE_PUBLISHABLE_KEY =
-    "DEIN_PUBLISHABLE_KEY_HIER";
+    "sb_publishable_6NUyHWlGPe2U4-XTEn2TFw_UV1XQspK";
 
 const supabase =
     window.supabase.createClient(
@@ -92,7 +92,9 @@ if (!sessionId) {
             "",
             newUrl
         );
+
     }
+
 }
 
 
@@ -285,26 +287,6 @@ function generateSessionId() {
 
 async function initializeRealtime() {
 
-    if (
-        !SUPABASE_URL ||
-        !SUPABASE_PUBLISHABLE_KEY ||
-        SUPABASE_PUBLISHABLE_KEY ===
-            "DEIN_PUBLISHABLE_KEY_HIER"
-    ) {
-
-        console.error(
-            "Supabase Key fehlt."
-        );
-
-        showNotification(
-            "SUPABASE KEY FEHLT"
-        );
-
-        return;
-
-    }
-
-
     const channelName =
         `live-regie-${sessionId}`;
 
@@ -317,7 +299,6 @@ async function initializeRealtime() {
 
                     broadcast: {
                         self: false
-
                     },
 
                     presence: {
@@ -437,7 +418,7 @@ async function initializeRealtime() {
 
 
                 console.log(
-                    "Realtime verbunden:",
+                    "Supabase Realtime verbunden:",
                     channelName
                 );
 
@@ -461,6 +442,7 @@ async function initializeRealtime() {
                     sendCameraStatus(
                         true
                     );
+
 
                 } else {
 
@@ -513,9 +495,6 @@ function handlePresenceSync() {
         realtimeChannel.presenceState();
 
 
-    let camerasOnline = 0;
-
-
     for (
         let i = 1;
         i <= TOTAL_CAMERAS;
@@ -525,11 +504,10 @@ function handlePresenceSync() {
         const key =
             `cam-${i}`;
 
+
         if (
             state[key]
         ) {
-
-            camerasOnline++;
 
             setCameraOnline(
                 i,
@@ -545,12 +523,6 @@ function handlePresenceSync() {
         }
 
     }
-
-
-    console.log(
-        "Cameras online:",
-        camerasOnline
-    );
 
 }
 
@@ -1087,6 +1059,11 @@ async function createCameraOffer(
     }
 
 
+    closePeerConnection(
+        cameraNumber
+    );
+
+
     const pc =
         createPeerConnection(
             cameraNumber
@@ -1303,12 +1280,6 @@ function createPeerConnection(
                 cameraNumber
             ].stream =
                 stream;
-
-
-            setCameraOnline(
-                cameraNumber,
-                `CAM ${cameraNumber}`
-            );
 
 
             updateProgramVideo();
@@ -1646,9 +1617,7 @@ function closePeerConnection(
 
             oldPc.close();
 
-        } catch (
-            error
-        ) {
+        } catch (error) {
 
             console.warn(
                 error
@@ -2547,9 +2516,13 @@ function setupQrSystem() {
         "click",
         () => {
 
-            qrModal.classList.remove(
-                "hidden"
-            );
+            if (qrModal) {
+
+                qrModal.classList.remove(
+                    "hidden"
+                );
+
+            }
 
 
             generateQrCode(
@@ -2566,9 +2539,13 @@ function setupQrSystem() {
             "click",
             () => {
 
-                qrModal.classList.add(
-                    "hidden"
-                );
+                if (qrModal) {
+
+                    qrModal.classList.add(
+                        "hidden"
+                    );
+
+                }
 
             }
         );
@@ -3245,11 +3222,6 @@ async function startLocalCamera() {
         );
 
 
-        /*
-         * Sobald die Kamera läuft,
-         * Verbindung zur Regie aufbauen.
-         */
-
         if (
             realtimeReady
         ) {
@@ -3258,11 +3230,6 @@ async function startLocalCamera() {
 
         }
 
-
-        /*
-         * Falls die Regie später beitritt,
-         * regelmäßig erneut melden.
-         */
 
         startCameraHelloLoop();
 
@@ -3527,7 +3494,6 @@ console.log(
     "LIVE REGIE script loaded."
 );
 
-
 console.log(
     "Mode:",
     isCameraMode
@@ -3535,12 +3501,10 @@ console.log(
         : "DIRECTOR"
 );
 
-
 console.log(
     "Camera:",
     cameraParameter || "REGIE"
 );
-
 
 console.log(
     "Session:",
