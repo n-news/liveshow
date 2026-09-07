@@ -1,7 +1,25 @@
 /* =========================================================
    LIVE REGIE
    Director + Camera Device
+   Supabase Realtime + WebRTC
 ========================================================= */
+
+
+/* =========================================================
+   SUPABASE
+========================================================= */
+
+const SUPABASE_URL =
+    "https://aweburrixtbmdwuysrnk.supabase.co";
+
+const SUPABASE_PUBLISHABLE_KEY =
+    "DEIN_PUBLISHABLE_KEY_HIER";
+
+const supabase =
+    window.supabase.createClient(
+        SUPABASE_URL,
+        SUPABASE_PUBLISHABLE_KEY
+    );
 
 
 /* =========================================================
@@ -31,13 +49,89 @@ const TOTAL_CAMERAS = 9;
    URL / MODE
 ========================================================= */
 
-const params = new URLSearchParams(window.location.search);
+const params =
+    new URLSearchParams(
+        window.location.search
+    );
 
-const pageMode = params.get("mode");
-const cameraParameter = parseInt(params.get("cam"), 10);
+const pageMode =
+    params.get("mode");
+
+const cameraParameter =
+    parseInt(
+        params.get("cam"),
+        10
+    );
+
+const sessionParameter =
+    params.get("session");
 
 const isCameraMode =
     pageMode === "camera";
+
+
+/* =========================================================
+   SESSION
+========================================================= */
+
+let sessionId =
+    sessionParameter;
+
+if (!sessionId) {
+
+    sessionId =
+        generateSessionId();
+
+    if (!isCameraMode) {
+
+        const newUrl =
+            `${window.location.pathname}?session=${sessionId}`;
+
+        window.history.replaceState(
+            {},
+            "",
+            newUrl
+        );
+    }
+}
+
+
+/* =========================================================
+   WEBRTC
+========================================================= */
+
+const peerConnections = {};
+
+const pendingIceCandidates = {};
+
+const remoteStreams = {};
+
+const ICE_SERVERS = {
+
+    iceServers: [
+
+        {
+            urls:
+                "stun:stun.l.google.com:19302"
+        },
+
+        {
+            urls:
+                "stun:stun1.l.google.com:19302"
+        }
+
+    ]
+
+};
+
+
+/* =========================================================
+   SUPABASE CHANNEL
+========================================================= */
+
+let realtimeChannel = null;
+
+let realtimeReady = false;
 
 
 /* =========================================================
@@ -45,49 +139,79 @@ const isCameraMode =
 ========================================================= */
 
 const programCamera =
-    document.getElementById("programCamera");
+    document.getElementById(
+        "programCamera"
+    );
 
 const programCameraBig =
-    document.getElementById("programCameraBig");
+    document.getElementById(
+        "programCameraBig"
+    );
 
 const programVideo =
-    document.getElementById("programVideo");
+    document.getElementById(
+        "programVideo"
+    );
 
 const programPlaceholder =
-    document.getElementById("programPlaceholder");
+    document.getElementById(
+        "programPlaceholder"
+    );
 
 const programMonitor =
-    document.getElementById("programMonitor");
+    document.getElementById(
+        "programMonitor"
+    );
 
 const programTime =
-    document.getElementById("programTime");
+    document.getElementById(
+        "programTime"
+    );
 
 const recordTimer =
-    document.getElementById("recordTimer");
+    document.getElementById(
+        "recordTimer"
+    );
 
 const recordStatus =
-    document.getElementById("recordStatus");
+    document.getElementById(
+        "recordStatus"
+    );
 
 const recordButton =
-    document.getElementById("recordButton");
+    document.getElementById(
+        "recordButton"
+    );
 
 const cutButton =
-    document.getElementById("cutButton");
+    document.getElementById(
+        "cutButton"
+    );
 
 const fadeButton =
-    document.getElementById("fadeButton");
+    document.getElementById(
+        "fadeButton"
+    );
 
 const notification =
-    document.getElementById("notification");
+    document.getElementById(
+        "notification"
+    );
 
 const notificationText =
-    document.getElementById("notificationText");
+    document.getElementById(
+        "notificationText"
+    );
 
 const onlineCount =
-    document.getElementById("onlineCount");
+    document.getElementById(
+        "onlineCount"
+    );
 
 const systemCameraText =
-    document.getElementById("systemCameraText");
+    document.getElementById(
+        "systemCameraText"
+    );
 
 
 /* =========================================================
@@ -96,11 +220,24 @@ const systemCameraText =
 
 const cameraStates = {};
 
-for (let i = 1; i <= TOTAL_CAMERAS; i++) {
+for (
+    let i = 1;
+    i <= TOTAL_CAMERAS;
+    i++
+) {
+
     cameraStates[i] = {
+
         online: false,
-        device: "NO DEVICE"
+
+        device: "NO DEVICE",
+
+        stream: null,
+
+        connected: false
+
     };
+
 }
 
 
@@ -108,15 +245,1430 @@ for (let i = 1; i <= TOTAL_CAMERAS; i++) {
    INITIALIZE
 ========================================================= */
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener(
+    "DOMContentLoaded",
+    () => {
 
-    if (isCameraMode) {
-        initializeCameraPage();
-    } else {
-        initializeDirector();
+        initializeRealtime();
+
+        if (isCameraMode) {
+
+            initializeCameraPage();
+
+        } else {
+
+            initializeDirector();
+
+        }
+
+    }
+);
+
+
+/* =========================================================
+   SESSION ID
+========================================================= */
+
+function generateSessionId() {
+
+    return Math.random()
+        .toString(36)
+        .substring(2, 8)
+        .toUpperCase();
+
+}
+
+
+/* =========================================================
+   INITIALIZE REALTIME
+========================================================= */
+
+async function initializeRealtime() {
+
+    if (
+        !SUPABASE_URL ||
+        !SUPABASE_PUBLISHABLE_KEY ||
+        SUPABASE_PUBLISHABLE_KEY ===
+            "DEIN_PUBLISHABLE_KEY_HIER"
+    ) {
+
+        console.error(
+            "Supabase Key fehlt."
+        );
+
+        showNotification(
+            "SUPABASE KEY FEHLT"
+        );
+
+        return;
+
     }
 
-});
+
+    const channelName =
+        `live-regie-${sessionId}`;
+
+
+    realtimeChannel =
+        supabase.channel(
+            channelName,
+            {
+                config: {
+
+                    broadcast: {
+                        self: false
+
+                    },
+
+                    presence: {
+                        key:
+                            isCameraMode
+                                ? `cam-${cameraParameter || 1}`
+                                : "director"
+                    }
+
+                }
+
+            }
+        );
+
+
+    realtimeChannel.on(
+        "broadcast",
+        {
+            event: "webrtc"
+        },
+        async ({
+            payload
+        }) => {
+
+            await handleWebRTCMessage(
+                payload
+            );
+
+        }
+    );
+
+
+    realtimeChannel.on(
+        "broadcast",
+        {
+            event: "camera-status"
+        },
+        ({
+            payload
+        }) => {
+
+            if (!isCameraMode) {
+
+                handleCameraStatus(
+                    payload
+                );
+
+            }
+
+        }
+    );
+
+
+    realtimeChannel.on(
+        "presence",
+        {
+            event: "sync"
+        },
+        () => {
+
+            handlePresenceSync();
+
+        }
+    );
+
+
+    realtimeChannel.on(
+        "presence",
+        {
+            event: "join"
+        },
+        ({
+            key
+        }) => {
+
+            handlePresenceJoin(
+                key
+            );
+
+        }
+    );
+
+
+    realtimeChannel.on(
+        "presence",
+        {
+            event: "leave"
+        },
+        ({
+            key
+        }) => {
+
+            handlePresenceLeave(
+                key
+            );
+
+        }
+    );
+
+
+    realtimeChannel.subscribe(
+        async (status) => {
+
+            console.log(
+                "Supabase:",
+                status
+            );
+
+
+            if (
+                status ===
+                "SUBSCRIBED"
+            ) {
+
+                realtimeReady =
+                    true;
+
+
+                console.log(
+                    "Realtime verbunden:",
+                    channelName
+                );
+
+
+                if (isCameraMode) {
+
+                    await realtimeChannel.track(
+                        {
+                            role:
+                                "camera",
+
+                            cam:
+                                cameraParameter || 1,
+
+                            online:
+                                true
+                        }
+                    );
+
+
+                    sendCameraStatus(
+                        true
+                    );
+
+                } else {
+
+                    await realtimeChannel.track(
+                        {
+                            role:
+                                "director",
+
+                            online:
+                                true
+                        }
+                    );
+
+
+                    showNotification(
+                        `SESSION ${sessionId}`
+                    );
+
+                }
+
+            }
+
+        }
+    );
+
+}
+
+
+/* =========================================================
+   PRESENCE
+========================================================= */
+
+function handlePresenceSync() {
+
+    if (isCameraMode) {
+
+        return;
+
+    }
+
+
+    if (!realtimeChannel) {
+
+        return;
+
+    }
+
+
+    const state =
+        realtimeChannel.presenceState();
+
+
+    let camerasOnline = 0;
+
+
+    for (
+        let i = 1;
+        i <= TOTAL_CAMERAS;
+        i++
+    ) {
+
+        const key =
+            `cam-${i}`;
+
+        if (
+            state[key]
+        ) {
+
+            camerasOnline++;
+
+            setCameraOnline(
+                i,
+                `CAM ${i}`
+            );
+
+        } else {
+
+            setCameraOffline(
+                i
+            );
+
+        }
+
+    }
+
+
+    console.log(
+        "Cameras online:",
+        camerasOnline
+    );
+
+}
+
+
+function handlePresenceJoin(
+    key
+) {
+
+    if (isCameraMode) {
+
+        return;
+
+    }
+
+
+    if (
+        key.startsWith(
+            "cam-"
+        )
+    ) {
+
+        const cam =
+            parseInt(
+                key.replace(
+                    "cam-",
+                    ""
+                ),
+                10
+            );
+
+
+        if (
+            cam >= 1 &&
+            cam <= TOTAL_CAMERAS
+        ) {
+
+            setCameraOnline(
+                cam,
+                `CAM ${cam}`
+            );
+
+
+            sendDirectorHello(
+                cam
+            );
+
+        }
+
+    }
+
+}
+
+
+function handlePresenceLeave(
+    key
+) {
+
+    if (isCameraMode) {
+
+        return;
+
+    }
+
+
+    if (
+        key.startsWith(
+            "cam-"
+        )
+    ) {
+
+        const cam =
+            parseInt(
+                key.replace(
+                    "cam-",
+                    ""
+                ),
+                10
+            );
+
+
+        if (
+            cam >= 1 &&
+            cam <= TOTAL_CAMERAS
+        ) {
+
+            setCameraOffline(
+                cam
+            );
+
+        }
+
+    }
+
+}
+
+
+/* =========================================================
+   CAMERA STATUS
+========================================================= */
+
+function handleCameraStatus(
+    payload
+) {
+
+    if (!payload) {
+
+        return;
+
+    }
+
+
+    const cam =
+        parseInt(
+            payload.cam,
+            10
+        );
+
+
+    if (
+        !cam ||
+        cam < 1 ||
+        cam > TOTAL_CAMERAS
+    ) {
+
+        return;
+
+    }
+
+
+    if (
+        payload.online
+    ) {
+
+        setCameraOnline(
+            cam,
+            payload.device ||
+                `CAM ${cam}`
+        );
+
+    } else {
+
+        setCameraOffline(
+            cam
+        );
+
+    }
+
+}
+
+
+function sendCameraStatus(
+    online
+) {
+
+    if (
+        !realtimeChannel ||
+        !realtimeReady
+    ) {
+
+        return;
+
+    }
+
+
+    const cam =
+        cameraParameter || 1;
+
+
+    realtimeChannel.send({
+
+        type: "broadcast",
+
+        event: "camera-status",
+
+        payload: {
+
+            cam: cam,
+
+            online: online,
+
+            device:
+                `CAM ${cam}`
+
+        }
+
+    });
+
+}
+
+
+/* =========================================================
+   DIRECTOR HELLO
+========================================================= */
+
+async function sendDirectorHello(
+    cameraNumber
+) {
+
+    if (
+        !realtimeChannel ||
+        !realtimeReady
+    ) {
+
+        return;
+
+    }
+
+
+    await realtimeChannel.send({
+
+        type: "broadcast",
+
+        event: "webrtc",
+
+        payload: {
+
+            type:
+                "director-hello",
+
+            cam:
+                cameraNumber
+
+        }
+
+    });
+
+}
+
+
+/* =========================================================
+   WEBRTC MESSAGE
+========================================================= */
+
+async function handleWebRTCMessage(
+    payload
+) {
+
+    if (!payload) {
+
+        return;
+
+    }
+
+
+    const messageCamera =
+        parseInt(
+            payload.cam,
+            10
+        );
+
+
+    if (
+        !messageCamera ||
+        messageCamera < 1 ||
+        messageCamera > TOTAL_CAMERAS
+    ) {
+
+        return;
+
+    }
+
+
+    if (
+        isCameraMode &&
+        messageCamera !==
+            (cameraParameter || 1)
+    ) {
+
+        return;
+
+    }
+
+
+    if (
+        !isCameraMode &&
+        payload.type ===
+            "camera-hello"
+    ) {
+
+        await handleCameraHello(
+            messageCamera
+        );
+
+        return;
+
+    }
+
+
+    if (
+        !isCameraMode &&
+        payload.type ===
+            "answer"
+    ) {
+
+        await handleAnswer(
+            messageCamera,
+            payload
+        );
+
+        return;
+
+    }
+
+
+    if (
+        !isCameraMode &&
+        payload.type ===
+            "ice"
+    ) {
+
+        await handleRemoteIce(
+            messageCamera,
+            payload
+        );
+
+        return;
+
+    }
+
+
+    if (
+        isCameraMode &&
+        payload.type ===
+            "director-hello"
+    ) {
+
+        await createCameraOffer(
+            messageCamera
+        );
+
+        return;
+
+    }
+
+
+    if (
+        isCameraMode &&
+        payload.type ===
+            "offer"
+    ) {
+
+        await handleOffer(
+            messageCamera,
+            payload
+        );
+
+        return;
+
+    }
+
+
+    if (
+        isCameraMode &&
+        payload.type ===
+            "ice"
+    ) {
+
+        await handleRemoteIce(
+            messageCamera,
+            payload
+        );
+
+        return;
+
+    }
+
+}
+
+
+/* =========================================================
+   CAMERA HELLO
+========================================================= */
+
+async function sendCameraHello() {
+
+    if (
+        !realtimeChannel ||
+        !realtimeReady
+    ) {
+
+        return;
+
+    }
+
+
+    const cam =
+        cameraParameter || 1;
+
+
+    await realtimeChannel.send({
+
+        type: "broadcast",
+
+        event: "webrtc",
+
+        payload: {
+
+            type:
+                "camera-hello",
+
+            cam: cam
+
+        }
+
+    });
+
+
+    console.log(
+        `CAM ${cam}: hello`
+    );
+
+}
+
+
+/* =========================================================
+   HANDLE CAMERA HELLO
+========================================================= */
+
+async function handleCameraHello(
+    cameraNumber
+) {
+
+    console.log(
+        `REGIE: CAM ${cameraNumber} möchte verbinden`
+    );
+
+
+    setCameraOnline(
+        cameraNumber,
+        `CAM ${cameraNumber}`
+    );
+
+
+    await createDirectorOffer(
+        cameraNumber
+    );
+
+}
+
+
+/* =========================================================
+   CREATE DIRECTOR OFFER
+========================================================= */
+
+async function createDirectorOffer(
+    cameraNumber
+) {
+
+    if (
+        !realtimeChannel ||
+        !realtimeReady
+    ) {
+
+        return;
+
+    }
+
+
+    closePeerConnection(
+        cameraNumber
+    );
+
+
+    const pc =
+        createPeerConnection(
+            cameraNumber
+        );
+
+
+    const offer =
+        await pc.createOffer({
+
+            offerToReceiveAudio:
+                true,
+
+            offerToReceiveVideo:
+                true
+
+        });
+
+
+    await pc.setLocalDescription(
+        offer
+    );
+
+
+    await realtimeChannel.send({
+
+        type: "broadcast",
+
+        event: "webrtc",
+
+        payload: {
+
+            type:
+                "offer",
+
+            cam:
+                cameraNumber,
+
+            sdp:
+                pc.localDescription
+
+        }
+
+    });
+
+
+    console.log(
+        `REGIE → CAM ${cameraNumber}: OFFER`
+    );
+
+}
+
+
+/* =========================================================
+   CAMERA OFFER
+========================================================= */
+
+async function createCameraOffer(
+    cameraNumber
+) {
+
+    if (
+        !localStream
+    ) {
+
+        console.log(
+            "Kamera noch nicht gestartet."
+        );
+
+        return;
+
+    }
+
+
+    const pc =
+        createPeerConnection(
+            cameraNumber
+        );
+
+
+    localStream
+        .getTracks()
+        .forEach(
+            track => {
+
+                pc.addTrack(
+                    track,
+                    localStream
+                );
+
+            }
+        );
+
+
+    const offer =
+        await pc.createOffer();
+
+
+    await pc.setLocalDescription(
+        offer
+    );
+
+
+    await realtimeChannel.send({
+
+        type: "broadcast",
+
+        event: "webrtc",
+
+        payload: {
+
+            type:
+                "offer",
+
+            cam:
+                cameraNumber,
+
+            sdp:
+                pc.localDescription
+
+        }
+
+    });
+
+
+    console.log(
+        `CAM ${cameraNumber} → REGIE: OFFER`
+    );
+
+}
+
+
+/* =========================================================
+   CREATE PEER CONNECTION
+========================================================= */
+
+function createPeerConnection(
+    cameraNumber
+) {
+
+    closePeerConnection(
+        cameraNumber
+    );
+
+
+    const pc =
+        new RTCPeerConnection(
+            ICE_SERVERS
+        );
+
+
+    peerConnections[
+        cameraNumber
+    ] = pc;
+
+
+    pendingIceCandidates[
+        cameraNumber
+    ] = [];
+
+
+    pc.onicecandidate =
+        async event => {
+
+            if (
+                !event.candidate
+            ) {
+
+                return;
+
+            }
+
+
+            await sendIceCandidate(
+                cameraNumber,
+                event.candidate
+            );
+
+        };
+
+
+    pc.onconnectionstatechange =
+        () => {
+
+            console.log(
+                `CAM ${cameraNumber} WebRTC:`,
+                pc.connectionState
+            );
+
+
+            if (
+                pc.connectionState ===
+                    "connected"
+            ) {
+
+                cameraStates[
+                    cameraNumber
+                ].connected = true;
+
+
+                setCameraOnline(
+                    cameraNumber,
+                    `CAM ${cameraNumber}`
+                );
+
+
+                showNotification(
+                    `CAM ${cameraNumber} VERBUNDEN`
+                );
+
+            }
+
+
+            if (
+                pc.connectionState ===
+                    "failed" ||
+                pc.connectionState ===
+                    "disconnected" ||
+                pc.connectionState ===
+                    "closed"
+            ) {
+
+                cameraStates[
+                    cameraNumber
+                ].connected = false;
+
+            }
+
+        };
+
+
+    pc.ontrack =
+        event => {
+
+            if (
+                isCameraMode
+            ) {
+
+                return;
+
+            }
+
+
+            const stream =
+                event.streams &&
+                event.streams[0];
+
+
+            if (!stream) {
+
+                return;
+
+            }
+
+
+            remoteStreams[
+                cameraNumber
+            ] = stream;
+
+
+            const video =
+                document.getElementById(
+                    `cameraVideo${cameraNumber}`
+                );
+
+
+            if (video) {
+
+                video.srcObject =
+                    stream;
+
+                video.muted =
+                    true;
+
+                video.playsInline =
+                    true;
+
+                video.autoplay =
+                    true;
+
+                video.style.display =
+                    "block";
+
+            }
+
+
+            cameraStates[
+                cameraNumber
+            ].stream =
+                stream;
+
+
+            setCameraOnline(
+                cameraNumber,
+                `CAM ${cameraNumber}`
+            );
+
+
+            updateProgramVideo();
+
+        };
+
+
+    return pc;
+
+}
+
+
+/* =========================================================
+   SEND ICE
+========================================================= */
+
+async function sendIceCandidate(
+    cameraNumber,
+    candidate
+) {
+
+    if (
+        !realtimeChannel ||
+        !realtimeReady
+    ) {
+
+        return;
+
+    }
+
+
+    await realtimeChannel.send({
+
+        type: "broadcast",
+
+        event: "webrtc",
+
+        payload: {
+
+            type:
+                "ice",
+
+            cam:
+                cameraNumber,
+
+            candidate:
+                candidate
+
+        }
+
+    });
+
+}
+
+
+/* =========================================================
+   HANDLE OFFER
+========================================================= */
+
+async function handleOffer(
+    cameraNumber,
+    payload
+) {
+
+    if (
+        !isCameraMode ||
+        !localStream
+    ) {
+
+        return;
+
+    }
+
+
+    const pc =
+        createPeerConnection(
+            cameraNumber
+        );
+
+
+    await pc.setRemoteDescription(
+        new RTCSessionDescription(
+            payload.sdp
+        )
+    );
+
+
+    const answer =
+        await pc.createAnswer();
+
+
+    await pc.setLocalDescription(
+        answer
+    );
+
+
+    await realtimeChannel.send({
+
+        type: "broadcast",
+
+        event: "webrtc",
+
+        payload: {
+
+            type:
+                "answer",
+
+            cam:
+                cameraNumber,
+
+            sdp:
+                pc.localDescription
+
+        }
+
+    });
+
+
+    console.log(
+        `CAM ${cameraNumber} → REGIE: ANSWER`
+    );
+
+
+    await addPendingIceCandidates(
+        cameraNumber
+    );
+
+}
+
+
+/* =========================================================
+   HANDLE ANSWER
+========================================================= */
+
+async function handleAnswer(
+    cameraNumber,
+    payload
+) {
+
+    if (
+        isCameraMode
+    ) {
+
+        return;
+
+    }
+
+
+    const pc =
+        peerConnections[
+            cameraNumber
+        ];
+
+
+    if (!pc) {
+
+        return;
+
+    }
+
+
+    if (
+        pc.signalingState !==
+        "have-local-offer"
+    ) {
+
+        return;
+
+    }
+
+
+    await pc.setRemoteDescription(
+        new RTCSessionDescription(
+            payload.sdp
+        )
+    );
+
+
+    await addPendingIceCandidates(
+        cameraNumber
+    );
+
+
+    console.log(
+        `REGIE ← CAM ${cameraNumber}: ANSWER`
+    );
+
+}
+
+
+/* =========================================================
+   HANDLE REMOTE ICE
+========================================================= */
+
+async function handleRemoteIce(
+    cameraNumber,
+    payload
+) {
+
+    const candidate =
+        payload.candidate;
+
+
+    if (!candidate) {
+
+        return;
+
+    }
+
+
+    const pc =
+        peerConnections[
+            cameraNumber
+        ];
+
+
+    if (
+        !pc ||
+        !pc.remoteDescription
+    ) {
+
+        if (
+            !pendingIceCandidates[
+                cameraNumber
+            ]
+        ) {
+
+            pendingIceCandidates[
+                cameraNumber
+            ] = [];
+
+        }
+
+
+        pendingIceCandidates[
+            cameraNumber
+        ].push(
+            candidate
+        );
+
+        return;
+
+    }
+
+
+    try {
+
+        await pc.addIceCandidate(
+            new RTCIceCandidate(
+                candidate
+            )
+        );
+
+    } catch (error) {
+
+        console.error(
+            "ICE Fehler:",
+            error
+        );
+
+    }
+
+}
+
+
+/* =========================================================
+   ADD PENDING ICE
+========================================================= */
+
+async function addPendingIceCandidates(
+    cameraNumber
+) {
+
+    const pc =
+        peerConnections[
+            cameraNumber
+        ];
+
+
+    const candidates =
+        pendingIceCandidates[
+            cameraNumber
+        ] || [];
+
+
+    for (
+        const candidate
+        of candidates
+    ) {
+
+        try {
+
+            await pc.addIceCandidate(
+                new RTCIceCandidate(
+                    candidate
+                )
+            );
+
+        } catch (error) {
+
+            console.error(
+                "Pending ICE Fehler:",
+                error
+            );
+
+        }
+
+    }
+
+
+    pendingIceCandidates[
+        cameraNumber
+    ] = [];
+
+}
+
+
+/* =========================================================
+   CLOSE PEER
+========================================================= */
+
+function closePeerConnection(
+    cameraNumber
+) {
+
+    const oldPc =
+        peerConnections[
+            cameraNumber
+        ];
+
+
+    if (oldPc) {
+
+        try {
+
+            oldPc.close();
+
+        } catch (
+            error
+        ) {
+
+            console.warn(
+                error
+            );
+
+        }
+
+    }
+
+
+    delete peerConnections[
+        cameraNumber
+    ];
+
+
+    pendingIceCandidates[
+        cameraNumber
+    ] = [];
+
+}
 
 
 /* =========================================================
@@ -125,7 +1677,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
 function initializeDirector() {
 
-    document.body.classList.remove("camera-page");
+    document.body.classList.remove(
+        "camera-page"
+    );
+
 
     updateProgramDisplay();
 
@@ -139,12 +1694,20 @@ function initializeDirector() {
 
     updateOnlineCount();
 
+
     showNotification(
-        "REGIE SYSTEM READY"
+        `REGIE READY — SESSION ${sessionId}`
     );
+
 
     console.log(
         "LIVE REGIE initialized"
+    );
+
+
+    console.log(
+        "Session:",
+        sessionId
     );
 
 }
@@ -156,14 +1719,24 @@ function initializeDirector() {
 
 function setupCameraButtons() {
 
-    for (let i = 1; i <= TOTAL_CAMERAS; i++) {
+    for (
+        let i = 1;
+        i <= TOTAL_CAMERAS;
+        i++
+    ) {
 
         const button =
             document.getElementById(
                 `cameraButton${i}`
             );
 
-        if (!button) continue;
+
+        if (!button) {
+
+            continue;
+
+        }
+
 
         button.addEventListener(
             "click",
@@ -188,14 +1761,24 @@ function setupCameraButtons() {
 
 function setupCameraCards() {
 
-    for (let i = 1; i <= TOTAL_CAMERAS; i++) {
+    for (
+        let i = 1;
+        i <= TOTAL_CAMERAS;
+        i++
+    ) {
 
         const card =
             document.getElementById(
                 `cameraCard${i}`
             );
 
-        if (!card) continue;
+
+        if (!card) {
+
+            continue;
+
+        }
+
 
         card.addEventListener(
             "click",
@@ -227,17 +1810,25 @@ function switchCamera(
         cameraNumber < 1 ||
         cameraNumber > TOTAL_CAMERAS
     ) {
+
         return;
+
     }
 
 
-    if (cameraNumber === currentCamera) {
+    if (
+        cameraNumber ===
+        currentCamera
+    ) {
 
         showNotification(
             `CAM ${cameraNumber} BEREITS PROGRAM`
         );
 
+        updateProgramVideo();
+
         return;
+
     }
 
 
@@ -248,9 +1839,12 @@ function switchCamera(
     updateProgramDisplay();
 
 
-    if (transition === "fade") {
+    if (
+        transition === "fade"
+    ) {
 
         playFadeTransition();
+
 
         showNotification(
             `FADE → CAM ${cameraNumber}`
@@ -278,11 +1872,20 @@ function switchCamera(
 
 function updateProgramDisplay() {
 
-    programCamera.textContent =
-        currentCamera;
+    if (programCamera) {
 
-    programCameraBig.textContent =
-        currentCamera;
+        programCamera.textContent =
+            currentCamera;
+
+    }
+
+
+    if (programCameraBig) {
+
+        programCameraBig.textContent =
+            currentCamera;
+
+    }
 
 
     for (
@@ -295,6 +1898,7 @@ function updateProgramDisplay() {
             document.getElementById(
                 `cameraCard${i}`
             );
+
 
         const button =
             document.getElementById(
@@ -335,40 +1939,85 @@ function updateProgramDisplay() {
 
 function updateProgramVideo() {
 
-    const video =
-        document.getElementById(
-            `cameraVideo${currentCamera}`
-        );
+    if (
+        !programVideo
+    ) {
 
-    if (!video) {
         return;
+
     }
 
 
+    const stream =
+        remoteStreams[
+            currentCamera
+        ];
+
+
     if (
-        video.srcObject &&
-        video.readyState >= 2
+        stream
     ) {
 
         programVideo.srcObject =
-            video.srcObject;
+            stream;
+
+        programVideo.muted =
+            false;
+
+        programVideo.autoplay =
+            true;
+
+        programVideo.playsInline =
+            true;
 
         programVideo.style.display =
             "block";
 
-        programPlaceholder.style.display =
-            "none";
+
+        if (
+            programPlaceholder
+        ) {
+
+            programPlaceholder.style.display =
+                "none";
+
+        }
+
+
+        const playPromise =
+            programVideo.play();
+
+
+        if (
+            playPromise &&
+            playPromise.catch
+        ) {
+
+            playPromise.catch(
+                () => {}
+            );
+
+        }
+
 
     } else {
 
         programVideo.srcObject =
             null;
 
+
         programVideo.style.display =
             "none";
 
-        programPlaceholder.style.display =
-            "flex";
+
+        if (
+            programPlaceholder
+        ) {
+
+            programPlaceholder.style.display =
+                "flex";
+
+        }
 
     }
 
@@ -381,21 +2030,39 @@ function updateProgramVideo() {
 
 function playFadeTransition() {
 
+    if (
+        !programMonitor
+    ) {
+
+        return;
+
+    }
+
+
     programMonitor.animate(
         [
+
             {
                 opacity: 1
             },
+
             {
                 opacity: .1
             },
+
             {
                 opacity: 1
             }
+
         ],
+
         {
+
             duration: 450,
-            easing: "ease-in-out"
+
+            easing:
+                "ease-in-out"
+
         }
     );
 
@@ -411,11 +2078,14 @@ function cutToOtherCamera() {
     let nextCamera =
         currentCamera + 1;
 
+
     if (
         nextCamera >
         TOTAL_CAMERAS
     ) {
+
         nextCamera = 1;
+
     }
 
 
@@ -436,11 +2106,14 @@ function fadeToOtherCamera() {
     let nextCamera =
         currentCamera + 1;
 
+
     if (
         nextCamera >
         TOTAL_CAMERAS
     ) {
+
         nextCamera = 1;
+
     }
 
 
@@ -460,24 +2133,19 @@ function setupKeyboard() {
 
     document.addEventListener(
         "keydown",
-        (event) => {
-
-            /*
-             * Don't trigger shortcuts while
-             * typing into an input.
-             */
+        event => {
 
             if (
-                event.target.tagName === "INPUT" ||
-                event.target.tagName === "TEXTAREA"
+                event.target.tagName ===
+                    "INPUT" ||
+                event.target.tagName ===
+                    "TEXTAREA"
             ) {
+
                 return;
+
             }
 
-
-            /*
-             * 1 - 9
-             */
 
             if (
                 event.key >= "1" &&
@@ -485,20 +2153,21 @@ function setupKeyboard() {
             ) {
 
                 switchCamera(
-                    parseInt(event.key, 10),
+                    parseInt(
+                        event.key,
+                        10
+                    ),
                     "cut"
                 );
 
                 return;
+
             }
 
 
-            /*
-             * SPACE = CUT
-             */
-
             if (
-                event.code === "Space"
+                event.code ===
+                "Space"
             ) {
 
                 event.preventDefault();
@@ -506,43 +2175,37 @@ function setupKeyboard() {
                 cutToOtherCamera();
 
                 return;
+
             }
 
 
-            /*
-             * F = FADE
-             */
-
             if (
-                event.key.toLowerCase() === "f"
+                event.key.toLowerCase() ===
+                "f"
             ) {
 
                 fadeToOtherCamera();
 
                 return;
+
             }
 
 
-            /*
-             * R = RECORD
-             */
-
             if (
-                event.key.toLowerCase() === "r"
+                event.key.toLowerCase() ===
+                "r"
             ) {
 
                 toggleRecording();
 
                 return;
+
             }
 
 
-            /*
-             * ESC = STOP RECORDING
-             */
-
             if (
-                event.key === "Escape" &&
+                event.key ===
+                    "Escape" &&
                 recording
             ) {
 
@@ -562,7 +2225,9 @@ function setupKeyboard() {
 
 function toggleRecording() {
 
-    if (recording) {
+    if (
+        recording
+    ) {
 
         stopRecording();
 
@@ -575,42 +2240,56 @@ function toggleRecording() {
 }
 
 
-/*
- * IMPORTANT:
- * This is currently the REGIE RECORDING STATE.
- *
- * Real recording of the switched WebRTC
- * PROGRAM output will be added once
- * the WebRTC connection is implemented.
- */
-
 function startRecording() {
 
-    if (recording) {
+    if (
+        recording
+    ) {
+
         return;
+
     }
 
 
-    recording = true;
+    recording =
+        true;
 
-    recordSeconds = 0;
-
-
-    recordStatus.classList.add(
-        "recording"
-    );
-
-    recordButton.classList.add(
-        "recording"
-    );
+    recordSeconds =
+        0;
 
 
-    recordTimer.textContent =
-        "00:00:00";
+    if (recordStatus) {
+
+        recordStatus.classList.add(
+            "recording"
+        );
+
+    }
 
 
-    programTime.textContent =
-        "00:00:00";
+    if (recordButton) {
+
+        recordButton.classList.add(
+            "recording"
+        );
+
+    }
+
+
+    if (recordTimer) {
+
+        recordTimer.textContent =
+            "00:00:00";
+
+    }
+
+
+    if (programTime) {
+
+        programTime.textContent =
+            "00:00:00";
+
+    }
 
 
     recordInterval =
@@ -619,16 +2298,27 @@ function startRecording() {
 
                 recordSeconds++;
 
+
                 const formatted =
                     formatTime(
                         recordSeconds
                     );
 
-                recordTimer.textContent =
-                    formatted;
 
-                programTime.textContent =
-                    formatted;
+                if (recordTimer) {
+
+                    recordTimer.textContent =
+                        formatted;
+
+                }
+
+
+                if (programTime) {
+
+                    programTime.textContent =
+                        formatted;
+
+                }
 
             },
             1000
@@ -644,28 +2334,44 @@ function startRecording() {
 
 function stopRecording() {
 
-    if (!recording) {
+    if (
+        !recording
+    ) {
+
         return;
+
     }
 
 
-    recording = false;
+    recording =
+        false;
 
 
     clearInterval(
         recordInterval
     );
 
-    recordInterval = null;
+
+    recordInterval =
+        null;
 
 
-    recordStatus.classList.remove(
-        "recording"
-    );
+    if (recordStatus) {
 
-    recordButton.classList.remove(
-        "recording"
-    );
+        recordStatus.classList.remove(
+            "recording"
+        );
+
+    }
+
+
+    if (recordButton) {
+
+        recordButton.classList.remove(
+            "recording"
+        );
+
+    }
 
 
     showNotification(
@@ -679,34 +2385,47 @@ function stopRecording() {
    TIME FORMAT
 ========================================================= */
 
-function formatTime(totalSeconds) {
+function formatTime(
+    totalSeconds
+) {
 
     const hours =
         Math.floor(
             totalSeconds / 3600
         );
 
+
     const minutes =
         Math.floor(
-            (totalSeconds % 3600) / 60
+            (totalSeconds % 3600) /
+            60
         );
+
 
     const seconds =
         totalSeconds % 60;
 
 
     return [
+
         hours,
+
         minutes,
+
         seconds
+
     ]
+
         .map(
             value =>
-                String(value).padStart(
+                String(
+                    value
+                ).padStart(
                     2,
                     "0"
                 )
         )
+
         .join(":");
 
 }
@@ -750,13 +2469,17 @@ if (recordButton) {
    NOTIFICATIONS
 ========================================================= */
 
-function showNotification(message) {
+function showNotification(
+    message
+) {
 
     if (
         !notification ||
         !notificationText
     ) {
+
         return;
+
     }
 
 
@@ -800,10 +2523,12 @@ function setupQrSystem() {
             "qrButton"
         );
 
+
     const qrModal =
         document.getElementById(
             "qrModal"
         );
+
 
     const closeQr =
         document.getElementById(
@@ -812,7 +2537,9 @@ function setupQrSystem() {
 
 
     if (!qrButton) {
+
         return;
+
     }
 
 
@@ -824,6 +2551,7 @@ function setupQrSystem() {
                 "hidden"
             );
 
+
             generateQrCode(
                 1
             );
@@ -832,35 +2560,43 @@ function setupQrSystem() {
     );
 
 
-    closeQr.addEventListener(
-        "click",
-        () => {
+    if (closeQr) {
 
-            qrModal.classList.add(
-                "hidden"
-            );
-
-        }
-    );
-
-
-    qrModal.addEventListener(
-        "click",
-        (event) => {
-
-            if (
-                event.target ===
-                qrModal
-            ) {
+        closeQr.addEventListener(
+            "click",
+            () => {
 
                 qrModal.classList.add(
                     "hidden"
                 );
 
             }
+        );
 
-        }
-    );
+    }
+
+
+    if (qrModal) {
+
+        qrModal.addEventListener(
+            "click",
+            event => {
+
+                if (
+                    event.target ===
+                    qrModal
+                ) {
+
+                    qrModal.classList.add(
+                        "hidden"
+                    );
+
+                }
+
+            }
+        );
+
+    }
 
 
     const selectorButtons =
@@ -881,6 +2617,7 @@ function setupQrSystem() {
                             button.dataset.qrCamera,
                             10
                         );
+
 
                     generateQrCode(
                         camera
@@ -908,10 +2645,12 @@ function generateQrCode(
             "qrcode"
         );
 
+
     const selected =
         document.getElementById(
             "qrSelectedCamera"
         );
+
 
     const urlText =
         document.getElementById(
@@ -919,12 +2658,17 @@ function generateQrCode(
         );
 
 
-    if (!qrContainer) {
+    if (
+        !qrContainer
+    ) {
+
         return;
+
     }
 
 
-    qrContainer.innerHTML = "";
+    qrContainer.innerHTML =
+        "";
 
 
     const baseUrl =
@@ -933,32 +2677,63 @@ function generateQrCode(
 
 
     const cameraUrl =
-        `${baseUrl}?mode=camera&cam=${cameraNumber}`;
+        `${baseUrl}?mode=camera&session=${encodeURIComponent(sessionId)}&cam=${cameraNumber}`;
+
+
+    if (
+        typeof QRCode ===
+        "undefined"
+    ) {
+
+        console.error(
+            "QRCode library fehlt."
+        );
+
+        return;
+
+    }
 
 
     new QRCode(
         qrContainer,
         {
-            text: cameraUrl,
 
-            width: 190,
-            height: 190,
+            text:
+                cameraUrl,
 
-            colorDark: "#000000",
-            colorLight: "#ffffff",
+            width:
+                190,
+
+            height:
+                190,
+
+            colorDark:
+                "#000000",
+
+            colorLight:
+                "#ffffff",
 
             correctLevel:
                 QRCode.CorrectLevel.M
+
         }
     );
 
 
-    selected.textContent =
-        cameraNumber;
+    if (selected) {
+
+        selected.textContent =
+            cameraNumber;
+
+    }
 
 
-    urlText.textContent =
-        cameraUrl;
+    if (urlText) {
+
+        urlText.textContent =
+            cameraUrl;
+
+    }
 
 
     document
@@ -970,10 +2745,12 @@ function generateQrCode(
 
                 button.classList.toggle(
                     "active",
+
                     parseInt(
                         button.dataset.qrCamera,
                         10
                     ) === cameraNumber
+
                 );
 
             }
@@ -1000,7 +2777,9 @@ function updateOnlineCount() {
         if (
             cameraStates[i].online
         ) {
+
             count++;
+
         }
 
     }
@@ -1030,25 +2809,30 @@ function updateOnlineCount() {
 
 function setCameraOnline(
     cameraNumber,
-    deviceName = "CAMERA DEVICE"
+    deviceName =
+        "CAMERA DEVICE"
 ) {
 
     if (
         cameraNumber < 1 ||
         cameraNumber > TOTAL_CAMERAS
     ) {
+
         return;
+
     }
 
 
     cameraStates[
         cameraNumber
-    ].online = true;
+    ].online =
+        true;
 
 
     cameraStates[
         cameraNumber
-    ].device = deviceName;
+    ].device =
+        deviceName;
 
 
     const status =
@@ -1056,10 +2840,12 @@ function setCameraOnline(
             `cameraStatus${cameraNumber}`
         );
 
+
     const device =
         document.getElementById(
             `cameraDevice${cameraNumber}`
         );
+
 
     const placeholder =
         document.getElementById(
@@ -1072,10 +2858,12 @@ function setCameraOnline(
         status.textContent =
             "ONLINE";
 
+
         status.classList.remove(
             "waiting",
             "offline"
         );
+
 
         status.classList.add(
             "online"
@@ -1092,6 +2880,101 @@ function setCameraOnline(
     }
 
 
+    if (
+        placeholder &&
+        remoteStreams[
+            cameraNumber
+        ]
+    ) {
+
+        placeholder.style.display =
+            "none";
+
+    }
+
+
+    updateOnlineCount();
+
+    updateProgramVideo();
+
+}
+
+
+/* =========================================================
+   SET CAMERA OFFLINE
+========================================================= */
+
+function setCameraOffline(
+    cameraNumber
+) {
+
+    if (
+        cameraNumber < 1 ||
+        cameraNumber > TOTAL_CAMERAS
+    ) {
+
+        return;
+
+    }
+
+
+    cameraStates[
+        cameraNumber
+    ].online =
+        false;
+
+
+    cameraStates[
+        cameraNumber
+    ].connected =
+        false;
+
+
+    const status =
+        document.getElementById(
+            `cameraStatus${cameraNumber}`
+        );
+
+
+    const device =
+        document.getElementById(
+            `cameraDevice${cameraNumber}`
+        );
+
+
+    const placeholder =
+        document.getElementById(
+            `cameraPlaceholder${cameraNumber}`
+        );
+
+
+    if (status) {
+
+        status.textContent =
+            "OFFLINE";
+
+
+        status.classList.remove(
+            "online",
+            "waiting"
+        );
+
+
+        status.classList.add(
+            "offline"
+        );
+
+    }
+
+
+    if (device) {
+
+        device.textContent =
+            "NO DEVICE";
+
+    }
+
+
     if (placeholder) {
 
         placeholder.style.display =
@@ -1101,8 +2984,6 @@ function setCameraOnline(
 
 
     updateOnlineCount();
-
-    updateProgramVideo();
 
 }
 
@@ -1138,17 +3019,27 @@ function initializeCameraPage() {
             "selectedCameraNumber"
         );
 
+
     const deviceCameraText =
         document.getElementById(
             "deviceCameraText"
         );
 
 
-    selectedCameraNumber.textContent =
-        selectedCamera;
+    if (selectedCameraNumber) {
 
-    deviceCameraText.textContent =
-        `CAM ${selectedCamera}`;
+        selectedCameraNumber.textContent =
+            selectedCamera;
+
+    }
+
+
+    if (deviceCameraText) {
+
+        deviceCameraText.textContent =
+            `CAM ${selectedCamera}`;
+
+    }
 
 
     document.title =
@@ -1160,22 +3051,31 @@ function initializeCameraPage() {
             "startCameraButton"
         );
 
+
     const switchButton =
         document.getElementById(
             "switchCameraButton"
         );
 
 
-    startButton.addEventListener(
-        "click",
-        startLocalCamera
-    );
+    if (startButton) {
+
+        startButton.addEventListener(
+            "click",
+            startLocalCamera
+        );
+
+    }
 
 
-    switchButton.addEventListener(
-        "click",
-        switchLocalCamera
-    );
+    if (switchButton) {
+
+        switchButton.addEventListener(
+            "click",
+            switchLocalCamera
+        );
+
+    }
 
 
     showCameraStatus(
@@ -1197,20 +3097,24 @@ async function startLocalCamera() {
             "localCameraVideo"
         );
 
+
     const placeholder =
         document.getElementById(
             "localCameraPlaceholder"
         );
+
 
     const startButton =
         document.getElementById(
             "startCameraButton"
         );
 
+
     const deviceStatus =
         document.getElementById(
             "deviceStatusText"
         );
+
 
     const deviceMic =
         document.getElementById(
@@ -1234,10 +3138,6 @@ async function startLocalCamera() {
 
     try {
 
-        /*
-         * Stop previous stream.
-         */
-
         if (localStream) {
 
             localStream
@@ -1251,53 +3151,86 @@ async function startLocalCamera() {
 
 
         localStream =
-            await navigator.mediaDevices.getUserMedia(
-                {
-                    video: {
-                        facingMode:
-                            currentFacingMode,
+            await navigator.mediaDevices
+                .getUserMedia(
 
-                        width: {
-                            ideal: 1920
+                    {
+
+                        video: {
+
+                            facingMode:
+                                currentFacingMode,
+
+                            width: {
+
+                                ideal:
+                                    1920
+
+                            },
+
+                            height: {
+
+                                ideal:
+                                    1080
+
+                            }
+
                         },
 
-                        height: {
-                            ideal: 1080
-                        }
-                    },
+                        audio: true
 
-                    audio: true
-                }
-            );
+                    }
+
+                );
 
 
-        video.srcObject =
-            localStream;
+        if (video) {
+
+            video.srcObject =
+                localStream;
+
+            video.style.display =
+                "block";
+
+        }
 
 
-        video.style.display =
-            "block";
+        if (placeholder) {
 
-        placeholder.style.display =
-            "none";
+            placeholder.style.display =
+                "none";
 
-
-        deviceStatus.textContent =
-            "ONLINE";
-
-        deviceStatus.style.color =
-            "var(--green)";
+        }
 
 
-        deviceMic.textContent =
-            "ONLINE";
+        if (deviceStatus) {
 
-        deviceMic.style.color =
-            "var(--green)";
+            deviceStatus.textContent =
+                "ONLINE";
+
+            deviceStatus.style.color =
+                "var(--green)";
+
+        }
 
 
-        startButton.textContent =
-            "● KAMERA ONLINE";
+        if (deviceMic) {
+
+            deviceMic.textContent =
+                "ONLINE";
+
+            deviceMic.style.color =
+                "var(--green)";
+
+        }
+
+
+        if (startButton) {
+
+            startButton.textContent =
+                "● KAMERA ONLINE";
+
+        }
 
 
         showCameraStatus(
@@ -1306,30 +3239,32 @@ async function startLocalCamera() {
         );
 
 
-        /*
-         * This event is ready for WebRTC.
-         */
-
-        window.dispatchEvent(
-            new CustomEvent(
-                "cameraStreamReady",
-                {
-                    detail: {
-                        stream:
-                            localStream,
-
-                        camera:
-                            cameraParameter || 1
-                    }
-                }
-            )
-        );
-
-
         console.log(
             "Local camera started",
             localStream
         );
+
+
+        /*
+         * Sobald die Kamera läuft,
+         * Verbindung zur Regie aufbauen.
+         */
+
+        if (
+            realtimeReady
+        ) {
+
+            await sendCameraHello();
+
+        }
+
+
+        /*
+         * Falls die Regie später beitritt,
+         * regelmäßig erneut melden.
+         */
+
+        startCameraHelloLoop();
 
 
     } catch (error) {
@@ -1345,6 +3280,47 @@ async function startLocalCamera() {
         );
 
     }
+
+}
+
+
+/* =========================================================
+   CAMERA HELLO LOOP
+========================================================= */
+
+let cameraHelloInterval =
+    null;
+
+
+function startCameraHelloLoop() {
+
+    if (
+        cameraHelloInterval
+    ) {
+
+        clearInterval(
+            cameraHelloInterval
+        );
+
+    }
+
+
+    cameraHelloInterval =
+        setInterval(
+            () => {
+
+                if (
+                    localStream &&
+                    realtimeReady
+                ) {
+
+                    sendCameraHello();
+
+                }
+
+            },
+            3000
+        );
 
 }
 
@@ -1368,8 +3344,10 @@ async function switchLocalCamera() {
 
     currentFacingMode =
         currentFacingMode ===
-        "environment"
+            "environment"
+
             ? "user"
+
             : "environment";
 
 
@@ -1392,14 +3370,26 @@ function showCameraStatus(
             "cameraModeStatus"
         );
 
+
     const dot =
         document.getElementById(
             "cameraModeDot"
         );
 
 
-    status.textContent =
-        text;
+    if (status) {
+
+        status.textContent =
+            text;
+
+    }
+
+
+    if (!dot) {
+
+        return;
+
+    }
 
 
     if (online) {
@@ -1407,6 +3397,7 @@ function showCameraStatus(
         dot.classList.remove(
             "red"
         );
+
 
         dot.classList.add(
             "green"
@@ -1417,6 +3408,7 @@ function showCameraStatus(
         dot.classList.remove(
             "green"
         );
+
 
         dot.classList.add(
             "red"
@@ -1446,6 +3438,7 @@ function showCameraError(
         deviceStatus.textContent =
             "FEHLER";
 
+
         deviceStatus.style.color =
             "var(--red)";
 
@@ -1466,12 +3459,21 @@ function showCameraError(
 
 
 /* =========================================================
-   CLEANUP CAMERA
+   CLEANUP
 ========================================================= */
 
 window.addEventListener(
     "beforeunload",
     () => {
+
+        if (cameraHelloInterval) {
+
+            clearInterval(
+                cameraHelloInterval
+            );
+
+        }
+
 
         if (localStream) {
 
@@ -1481,6 +3483,35 @@ window.addEventListener(
                     track =>
                         track.stop()
                 );
+
+        }
+
+
+        Object.keys(
+            peerConnections
+        ).forEach(
+            cam => {
+
+                closePeerConnection(
+                    parseInt(
+                        cam,
+                        10
+                    )
+                );
+
+            }
+        );
+
+
+        if (
+            realtimeChannel
+        ) {
+
+            realtimeChannel.untrack();
+
+            supabase.removeChannel(
+                realtimeChannel
+            );
 
         }
 
@@ -1496,6 +3527,7 @@ console.log(
     "LIVE REGIE script loaded."
 );
 
+
 console.log(
     "Mode:",
     isCameraMode
@@ -1503,7 +3535,14 @@ console.log(
         : "DIRECTOR"
 );
 
+
 console.log(
     "Camera:",
     cameraParameter || "REGIE"
+);
+
+
+console.log(
+    "Session:",
+    sessionId
 );
