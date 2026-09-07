@@ -22,32 +22,46 @@ const supabaseClient =
 
 
 /* =========================================================
-   SESSION
+   URL / SESSION
    ========================================================= */
 
-const params = new URLSearchParams(window.location.search);
+const params =
+    new URLSearchParams(window.location.search);
 
-let sessionId = params.get("session");
+let sessionId =
+    params.get("session");
 
 if (!sessionId) {
-    sessionId = Math.random()
-        .toString(36)
-        .substring(2, 8)
-        .toUpperCase();
+
+    sessionId =
+        Math.random()
+            .toString(36)
+            .substring(2, 8)
+            .toUpperCase();
 
     const newUrl =
         `${window.location.pathname}?session=${sessionId}`;
 
-    window.history.replaceState({}, "", newUrl);
+    window.history.replaceState(
+        {},
+        "",
+        newUrl
+    );
 }
 
 const isCameraMode =
     params.get("mode") === "camera";
 
 let cameraNumber =
-    parseInt(params.get("cam"), 10) || 1;
+    parseInt(
+        params.get("cam"),
+        10
+    ) || 1;
 
-if (cameraNumber < 1 || cameraNumber > 9) {
+if (
+    cameraNumber < 1 ||
+    cameraNumber > 9
+) {
     cameraNumber = 1;
 }
 
@@ -69,156 +83,233 @@ const ICE_SERVERS = [
 
 
 /* =========================================================
-   GLOBAL STATE
+   STATE
    ========================================================= */
-
-let currentCamera = 1;
-
-const remoteStreams = {};
-
-const directorPeers = {};
-
-let localStream = null;
-let cameraPeer = null;
 
 let channel = null;
 
+let currentCamera = 1;
+
+let localStream = null;
+
+let cameraPeer = null;
+
+const directorPeers = {};
+
+const remoteStreams = {};
+
+const pendingIceCandidates = {};
+
 let recording = false;
+
 let recordingStartTime = null;
+
 let recordingTimerInterval = null;
 
-let programClockStart = Date.now();
+let programClockStart =
+    Date.now();
+
+let cameraHelloInterval = null;
 
 
 /* =========================================================
-   DOM HELPERS
+   DOM HELPER
    ========================================================= */
 
 function $(id) {
     return document.getElementById(id);
 }
 
+
+/* =========================================================
+   NOTIFICATION
+   ========================================================= */
+
 function notify(message) {
-    const notification = $("notification");
-    const text = $("notificationText");
+
+    const notification =
+        $("notification");
+
+    const text =
+        $("notificationText");
 
     if (text) {
-        text.textContent = message;
+        text.textContent =
+            message;
     }
 
-    if (notification) {
-        notification.classList.add("show");
+    if (!notification) {
+        return;
+    }
 
-        clearTimeout(notification._timer);
+    notification.classList.add(
+        "show"
+    );
 
-        notification._timer = setTimeout(() => {
-            notification.classList.remove("show");
+    clearTimeout(
+        notification._timer
+    );
+
+    notification._timer =
+        setTimeout(() => {
+
+            notification.classList.remove(
+                "show"
+            );
+
         }, 2500);
-    }
 }
 
 
 /* =========================================================
-   SESSION CHANNEL
+   SUPABASE CHANNEL
    ========================================================= */
 
 function createChannel() {
 
-    channel = supabaseClient.channel(
-        `live-regie-${sessionId}`,
+    channel =
+        supabaseClient.channel(
+            `live-regie-${sessionId}`,
+            {
+                config: {
+                    broadcast: {
+                        self: false
+                    },
+                    presence: {
+                        key:
+                            `${isCameraMode ? "camera" : "director"}-${Math.random()
+                                .toString(36)
+                                .substring(2, 10)}`
+                    }
+                }
+            }
+        );
+
+
+    /* -----------------------------------------------------
+       WEBRTC BROADCAST
+       ----------------------------------------------------- */
+
+    channel.on(
+        "broadcast",
         {
-            config: {
-                broadcast: {
-                    self: false
-                },
-                presence: {
-                    key: crypto.randomUUID
+            event: "webrtc"
+        },
+        ({ payload }) => {
+
+            if (!payload) {
+                return;
+            }
+
+            handleWebRTCMessage(
+                payload
+            );
+        }
+    );
+
+
+    /* -----------------------------------------------------
+       CAMERA STATUS
+       ----------------------------------------------------- */
+
+    channel.on(
+        "broadcast",
+        {
+            event: "camera-status"
+        },
+        ({ payload }) => {
+
+            if (!payload) {
+                return;
+            }
+
+            handleCameraStatus(
+                payload
+            );
+        }
+    );
+
+
+    /* -----------------------------------------------------
+       PRESENCE
+       ----------------------------------------------------- */
+
+    channel.on(
+        "presence",
+        {
+            event: "sync"
+        },
+        () => {
+
+            updatePresenceStatus();
+        }
+    );
+
+    channel.on(
+        "presence",
+        {
+            event: "join"
+        },
+        () => {
+
+            updatePresenceStatus();
+        }
+    );
+
+    channel.on(
+        "presence",
+        {
+            event: "leave"
+        },
+        () => {
+
+            updatePresenceStatus();
+        }
+    );
+
+
+    /* -----------------------------------------------------
+       SUBSCRIBE
+       ----------------------------------------------------- */
+
+    channel.subscribe(
+        async status => {
+
+            console.log(
+                "Supabase:",
+                status
+            );
+
+
+            if (
+                status ===
+                "SUBSCRIBED"
+            ) {
+
+                console.log(
+                    "SESSION VERBUNDEN:",
+                    sessionId
+                );
+
+
+                await publishPresence();
+
+
+                if (isCameraMode) {
+
+                    notify(
+                        `CAM ${cameraNumber} BEREIT`
+                    );
+
+                } else {
+
+                    notify(
+                        `SESSION ${sessionId} ONLINE`
+                    );
                 }
             }
         }
     );
-
-    channel
-        .on(
-            "broadcast",
-            {
-                event: "webrtc"
-            },
-            ({ payload }) => {
-
-                if (!payload) return;
-
-                handleWebRTCMessage(payload);
-            }
-        )
-        .on(
-            "broadcast",
-            {
-                event: "camera-status"
-            },
-            ({ payload }) => {
-
-                if (!payload) return;
-
-                handleCameraStatus(payload);
-            }
-        )
-        .on(
-            "presence",
-            {
-                event: "sync"
-            },
-            () => {
-
-                updatePresenceStatus();
-            }
-        )
-        .on(
-            "presence",
-            {
-                event: "join"
-            },
-            () => {
-
-                updatePresenceStatus();
-            }
-        )
-        .on(
-            "presence",
-            {
-                event: "leave"
-            },
-            () => {
-
-                updatePresenceStatus();
-            }
-        );
-
-    channel.subscribe(async (status) => {
-
-        if (status === "SUBSCRIBED") {
-
-            console.log(
-                "Supabase Realtime verbunden:",
-                sessionId
-            );
-
-            await publishPresence();
-
-            if (!isCameraMode) {
-                notify(`SESSION ${sessionId} ONLINE`);
-            } else {
-                notify(`CAM ${cameraNumber} BEREIT`);
-            }
-
-        } else {
-
-            console.log(
-                "Supabase Status:",
-                status
-            );
-        }
-    });
 }
 
 
@@ -228,23 +319,30 @@ function createChannel() {
 
 async function publishPresence() {
 
-    if (!channel) return;
+    if (!channel) {
+        return;
+    }
 
     try {
 
         if (isCameraMode) {
 
             await channel.track({
+
                 role: "camera",
-                camera: cameraNumber
+
+                camera:
+                    cameraNumber
+
             });
 
         } else {
 
             await channel.track({
-                role: "director"
-            });
 
+                role: "director"
+
+            });
         }
 
     } catch (error) {
@@ -259,21 +357,32 @@ async function publishPresence() {
 
 function updatePresenceStatus() {
 
-    if (!channel) return;
+    if (
+        !channel ||
+        isCameraMode
+    ) {
+        return;
+    }
 
-    const state = channel.presenceState();
+    const state =
+        channel.presenceState();
 
     let online = 0;
 
-    Object.values(state).forEach(entries => {
+
+    Object.values(
+        state
+    ).forEach(entries => {
 
         entries.forEach(entry => {
 
             if (
-                entry.role === "camera" &&
-                entry.camera >= 1 &&
-                entry.camera <= MAX_CAMERAS
+                entry.role ===
+                    "camera" &&
+                Number(entry.camera) >= 1 &&
+                Number(entry.camera) <= 9
             ) {
+
                 online++;
             }
 
@@ -281,11 +390,10 @@ function updatePresenceStatus() {
 
     });
 
-    if (!isCameraMode) {
 
-        updateOnlineCount(online);
-
-    }
+    updateOnlineCount(
+        online
+    );
 }
 
 
@@ -293,16 +401,25 @@ function updatePresenceStatus() {
    BROADCAST
    ========================================================= */
 
-async function broadcast(payload) {
+async function broadcast(
+    payload
+) {
 
-    if (!channel) return;
+    if (!channel) {
+        return;
+    }
 
     try {
 
         await channel.send({
+
             type: "broadcast",
-            event: payload.event,
-            payload: payload
+
+            event:
+                payload.event,
+
+            payload:
+                payload
         });
 
     } catch (error) {
@@ -316,185 +433,102 @@ async function broadcast(payload) {
 
 
 /* =========================================================
-   CAMERA STATUS
-   ========================================================= */
-
-function handleCameraStatus(payload) {
-
-    const cam = Number(payload.camera);
-
-    if (
-        !cam ||
-        cam < 1 ||
-        cam > MAX_CAMERAS
-    ) {
-        return;
-    }
-
-    if (!isCameraMode) {
-
-        if (payload.status === "online") {
-
-            setCameraOnline(
-                cam,
-                payload.device || "CAMERA DEVICE"
-            );
-
-        }
-
-        if (payload.status === "offline") {
-
-            setCameraOffline(cam);
-
-        }
-
-        updateOnlineCountFromCards();
-    }
-}
-
-
-function setCameraOnline(cam, deviceName) {
-
-    const status = $(`cameraStatus${cam}`);
-    const placeholder = $(`cameraPlaceholder${cam}`);
-    const device = $(`cameraDevice${cam}`);
-
-    if (status) {
-
-        status.textContent = "ONLINE";
-
-        status.classList.remove("waiting");
-        status.classList.add("online");
-    }
-
-    if (placeholder) {
-        placeholder.classList.add("hidden");
-    }
-
-    if (device) {
-        device.textContent =
-            deviceName || "CAMERA DEVICE";
-    }
-}
-
-
-function setCameraOffline(cam) {
-
-    const status = $(`cameraStatus${cam}`);
-    const placeholder = $(`cameraPlaceholder${cam}`);
-    const device = $(`cameraDevice${cam}`);
-
-    if (status) {
-
-        status.textContent = "WAITING";
-
-        status.classList.remove("online");
-        status.classList.add("waiting");
-    }
-
-    if (placeholder) {
-        placeholder.classList.remove("hidden");
-    }
-
-    if (device) {
-        device.textContent = "NO DEVICE";
-    }
-}
-
-
-function updateOnlineCountFromCards() {
-
-    let count = 0;
-
-    for (let i = 1; i <= MAX_CAMERAS; i++) {
-
-        const status = $(`cameraStatus${i}`);
-
-        if (
-            status &&
-            status.classList.contains("online")
-        ) {
-            count++;
-        }
-    }
-
-    updateOnlineCount(count);
-}
-
-
-function updateOnlineCount(count) {
-
-    const onlineCount = $("onlineCount");
-    const systemCameraText =
-        $("systemCameraText");
-
-    if (onlineCount) {
-        onlineCount.textContent = count;
-    }
-
-    if (systemCameraText) {
-
-        systemCameraText.textContent =
-            `${count} CAMERAS ONLINE`;
-    }
-}
-
-
-/* =========================================================
    WEBRTC MESSAGE ROUTER
    ========================================================= */
 
-async function handleWebRTCMessage(payload) {
+async function handleWebRTCMessage(
+    payload
+) {
 
-    const type = payload.type;
+    if (!payload.type) {
+        return;
+    }
 
-    if (!type) return;
 
-
-    /* -----------------------------------------------------
-       CAMERA SIDE
-       ----------------------------------------------------- */
+    /* =====================================================
+       CAMERA
+       ===================================================== */
 
     if (isCameraMode) {
 
-        if (payload.camera !== cameraNumber) {
+        if (
+            Number(payload.camera) !==
+            cameraNumber
+        ) {
             return;
         }
 
-        if (type === "offer") {
 
-            await handleCameraOffer(payload);
+        if (
+            payload.type ===
+            "offer"
+        ) {
+
+            await handleCameraOffer(
+                payload
+            );
+
+            return;
         }
 
-        if (type === "ice") {
 
-            await handleCameraICE(payload);
+        if (
+            payload.type ===
+            "ice"
+        ) {
+
+            await handleCameraICE(
+                payload
+            );
+
+            return;
         }
+
 
         return;
     }
 
 
-    /* -----------------------------------------------------
-       DIRECTOR SIDE
-       ----------------------------------------------------- */
+    /* =====================================================
+       DIRECTOR
+       ===================================================== */
 
-    if (!isCameraMode) {
+    if (
+        payload.type ===
+        "camera-hello"
+    ) {
 
-        if (type === "camera-hello") {
+        await handleCameraHello(
+            payload
+        );
 
-            await handleCameraHello(payload);
-        }
+        return;
+    }
 
-        if (type === "answer") {
 
-            await handleCameraAnswer(payload);
-        }
+    if (
+        payload.type ===
+        "answer"
+    ) {
 
-        if (type === "ice") {
+        await handleCameraAnswer(
+            payload
+        );
 
-            await handleDirectorICE(payload);
-        }
+        return;
+    }
+
+
+    if (
+        payload.type ===
+        "ice"
+    ) {
+
+        await handleDirectorICE(
+            payload
+        );
+
+        return;
     }
 }
 
@@ -505,7 +539,13 @@ async function handleWebRTCMessage(payload) {
 
 async function sendCameraHello() {
 
-    if (!isCameraMode) return;
+    if (
+        !isCameraMode ||
+        !localStream
+    ) {
+        return;
+    }
+
 
     await broadcast({
 
@@ -513,14 +553,58 @@ async function sendCameraHello() {
 
         type: "camera-hello",
 
-        camera: cameraNumber,
+        camera:
+            cameraNumber,
 
-        session: sessionId,
+        session:
+            sessionId,
 
         device:
             navigator.userAgent
     });
+}
 
+
+/* =========================================================
+   CAMERA HELLO LOOP
+   ========================================================= */
+
+function startCameraHelloLoop() {
+
+    if (!isCameraMode) {
+        return;
+    }
+
+
+    clearInterval(
+        cameraHelloInterval
+    );
+
+
+    sendCameraHello();
+
+
+    cameraHelloInterval =
+        setInterval(
+            () => {
+
+                if (
+                    localStream &&
+                    (
+                        !cameraPeer ||
+                        (
+                            cameraPeer.connectionState !==
+                            "connected"
+                        )
+                    )
+                ) {
+
+                    sendCameraHello();
+                }
+
+            },
+            3000
+        );
 }
 
 
@@ -528,42 +612,54 @@ async function sendCameraHello() {
    DIRECTOR RECEIVES CAMERA HELLO
    ========================================================= */
 
-async function handleCameraHello(payload) {
+async function handleCameraHello(
+    payload
+) {
 
-    const cam = Number(payload.camera);
+    const cam =
+        Number(payload.camera);
+
 
     if (
-        !cam ||
         cam < 1 ||
         cam > MAX_CAMERAS
     ) {
         return;
     }
 
+
     console.log(
-        `CAM ${cam} meldet sich an`
+        `CAM ${cam} meldet sich`
     );
 
-    setCameraOnline(
+
+    setCameraConnecting(
         cam,
-        payload.device || "CAMERA DEVICE"
+        payload.device
     );
 
-    updateOnlineCountFromCards();
 
-    notify(`CAM ${cam} VERBINDET`);
-
-    await createDirectorOffer(cam);
+    await createDirectorPeer(
+        cam
+    );
 }
 
 
 /* =========================================================
-   DIRECTOR CREATE OFFER
+   CREATE DIRECTOR PEER
    ========================================================= */
 
-async function createDirectorOffer(cam) {
+async function createDirectorPeer(
+    cam
+) {
 
-    if (directorPeers[cam]) {
+    /* -----------------------------------------------------
+       CLOSE OLD PEER
+       ----------------------------------------------------- */
+
+    if (
+        directorPeers[cam]
+    ) {
 
         try {
             directorPeers[cam].close();
@@ -573,16 +669,27 @@ async function createDirectorOffer(cam) {
     }
 
 
-    const peer =
-        new RTCPeerConnection({
-            iceServers: ICE_SERVERS
-        });
-
-    directorPeers[cam] = peer;
+    pendingIceCandidates[cam] =
+        [];
 
 
     /* -----------------------------------------------------
-       RECEIVE CAMERA VIDEO
+       NEW PEER
+       ----------------------------------------------------- */
+
+    const peer =
+        new RTCPeerConnection({
+            iceServers:
+                ICE_SERVERS
+        });
+
+
+    directorPeers[cam] =
+        peer;
+
+
+    /* -----------------------------------------------------
+       RECEIVE ONLY VIDEO
        ----------------------------------------------------- */
 
     peer.addTransceiver(
@@ -594,7 +701,7 @@ async function createDirectorOffer(cam) {
 
 
     /* -----------------------------------------------------
-       RECEIVE CAMERA AUDIO
+       RECEIVE ONLY AUDIO
        ----------------------------------------------------- */
 
     peer.addTransceiver(
@@ -606,111 +713,165 @@ async function createDirectorOffer(cam) {
 
 
     /* -----------------------------------------------------
-       REMOTE STREAM
+       REMOTE TRACK
        ----------------------------------------------------- */
 
-    peer.ontrack = (event) => {
+    peer.ontrack =
+        event => {
 
-        console.log(
-            `CAM ${cam}: Track empfangen`
-        );
-
-        let stream =
-            remoteStreams[cam];
-
-        if (!stream) {
-
-            stream =
-                new MediaStream();
-
-            remoteStreams[cam] =
-                stream;
-        }
+            console.log(
+                `CAM ${cam}: TRACK`,
+                event.track.kind
+            );
 
 
-        if (
-            !stream.getTracks().some(
-                track =>
-                    track.id === event.track.id
-            )
-        ) {
-
-            stream.addTrack(event.track);
-        }
+            let stream =
+                remoteStreams[cam];
 
 
-        attachRemoteStream(
-            cam,
-            stream
-        );
-    };
+            if (!stream) {
+
+                stream =
+                    new MediaStream();
+
+                remoteStreams[cam] =
+                    stream;
+            }
+
+
+            const alreadyThere =
+                stream
+                    .getTracks()
+                    .some(
+                        track =>
+                            track.id ===
+                            event.track.id
+                    );
+
+
+            if (!alreadyThere) {
+
+                stream.addTrack(
+                    event.track
+                );
+            }
+
+
+            event.track.onended =
+                () => {
+
+                    console.log(
+                        `CAM ${cam}: Track beendet`
+                    );
+                };
+
+
+            attachRemoteStream(
+                cam,
+                stream
+            );
+        };
 
 
     /* -----------------------------------------------------
        ICE
        ----------------------------------------------------- */
 
-    peer.onicecandidate = async (event) => {
+    peer.onicecandidate =
+        async event => {
 
-        if (!event.candidate) return;
+            if (
+                !event.candidate
+            ) {
+                return;
+            }
 
-        await broadcast({
 
-            event: "webrtc",
+            await broadcast({
 
-            type: "ice",
+                event: "webrtc",
 
-            camera: cam,
+                type: "ice",
 
-            candidate:
-                event.candidate.toJSON()
-        });
-    };
+                camera: cam,
+
+                candidate:
+                    event.candidate
+                        .toJSON()
+            });
+        };
 
 
     /* -----------------------------------------------------
        CONNECTION STATE
        ----------------------------------------------------- */
 
-    peer.onconnectionstatechange = () => {
+    peer.onconnectionstatechange =
+        () => {
 
-        const state =
-            peer.connectionState;
+            const state =
+                peer.connectionState;
 
-        console.log(
-            `CAM ${cam} WebRTC:`,
-            state
-        );
-
-
-        if (
-            state === "connected"
-        ) {
-
-            setCameraOnline(
-                cam,
-                "CAMERA CONNECTED"
-            );
-
-            updateOnlineCountFromCards();
-
-            notify(
-                `CAM ${cam} VERBUNDEN`
-            );
-        }
-
-
-        if (
-            state === "failed" ||
-            state === "disconnected" ||
-            state === "closed"
-        ) {
 
             console.log(
-                `CAM ${cam} Verbindung beendet`
+                `CAM ${cam} CONNECTION:`,
+                state
             );
-        }
-    };
+
+
+            if (
+                state ===
+                "connected"
+            ) {
+
+                setCameraLive(
+                    cam
+                );
+
+                notify(
+                    `CAM ${cam} LIVE`
+                );
+            }
+
+
+            if (
+                state ===
+                "connecting"
+            ) {
+
+                setCameraConnecting(
+                    cam
+                );
+            }
+
+
+            if (
+                state ===
+                    "failed" ||
+                state ===
+                    "disconnected"
+            ) {
+
+                console.warn(
+                    `CAM ${cam}:`,
+                    state
+                );
+            }
+        };
+
+
+    /* -----------------------------------------------------
+       ICE CONNECTION
+       ----------------------------------------------------- */
+
+    peer.oniceconnectionstatechange =
+        () => {
+
+            console.log(
+                `CAM ${cam} ICE:`,
+                peer.iceConnectionState
+            );
+        };
 
 
     /* -----------------------------------------------------
@@ -721,6 +882,7 @@ async function createDirectorOffer(cam) {
 
         const offer =
             await peer.createOffer();
+
 
         await peer.setLocalDescription(
             offer
@@ -736,23 +898,27 @@ async function createDirectorOffer(cam) {
             camera: cam,
 
             offer: {
+
                 type:
-                    peer.localDescription.type,
+                    peer.localDescription
+                        .type,
 
                 sdp:
-                    peer.localDescription.sdp
+                    peer.localDescription
+                        .sdp
             }
         });
 
 
         console.log(
-            `Offer für CAM ${cam} gesendet`
+            `OFFER CAM ${cam} GESENDET`
         );
+
 
     } catch (error) {
 
         console.error(
-            `Offer CAM ${cam}:`,
+            `OFFER CAM ${cam}:`,
             error
         );
     }
@@ -763,17 +929,23 @@ async function createDirectorOffer(cam) {
    CAMERA RECEIVES OFFER
    ========================================================= */
 
-async function handleCameraOffer(payload) {
+async function handleCameraOffer(
+    payload
+) {
 
     if (!localStream) {
 
         console.warn(
-            "Kamera noch nicht gestartet"
+            "CAMERA: Kein LocalStream"
         );
 
         return;
     }
 
+
+    /* -----------------------------------------------------
+       OLD PEER CLOSE
+       ----------------------------------------------------- */
 
     if (cameraPeer) {
 
@@ -783,96 +955,133 @@ async function handleCameraOffer(payload) {
     }
 
 
-    const peer =
-        new RTCPeerConnection({
-            iceServers: ICE_SERVERS
-        });
-
-    cameraPeer = peer;
+    pendingIceCandidates.camera =
+        [];
 
 
     /* -----------------------------------------------------
-       ADD LOCAL CAMERA + MICROPHONE
+       NEW PEER
+       ----------------------------------------------------- */
+
+    const peer =
+        new RTCPeerConnection({
+            iceServers:
+                ICE_SERVERS
+        });
+
+
+    cameraPeer =
+        peer;
+
+
+    /* -----------------------------------------------------
+       ADD CAMERA + MICROPHONE
        ----------------------------------------------------- */
 
     localStream
         .getTracks()
-        .forEach(track => {
+        .forEach(
+            track => {
 
-            peer.addTrack(
-                track,
-                localStream
-            );
-        });
+                console.log(
+                    "SENDE TRACK:",
+                    track.kind
+                );
+
+
+                peer.addTrack(
+                    track,
+                    localStream
+                );
+            }
+        );
 
 
     /* -----------------------------------------------------
        ICE
        ----------------------------------------------------- */
 
-    peer.onicecandidate = async (event) => {
+    peer.onicecandidate =
+        async event => {
 
-        if (!event.candidate) return;
+            if (
+                !event.candidate
+            ) {
+                return;
+            }
 
-        await broadcast({
 
-            event: "webrtc",
+            await broadcast({
 
-            type: "ice",
+                event: "webrtc",
 
-            camera: cameraNumber,
+                type: "ice",
 
-            candidate:
-                event.candidate.toJSON()
-        });
-    };
+                camera:
+                    cameraNumber,
+
+                candidate:
+                    event.candidate
+                        .toJSON()
+            });
+        };
 
 
     /* -----------------------------------------------------
-       CONNECTION STATE
+       CONNECTION
        ----------------------------------------------------- */
 
-    peer.onconnectionstatechange = () => {
+    peer.onconnectionstatechange =
+        () => {
 
-        const state =
-            peer.connectionState;
-
-        console.log(
-            "Kamera WebRTC:",
-            state
-        );
+            const state =
+                peer.connectionState;
 
 
-        if (
-            state === "connected"
-        ) {
-
-            setCameraDeviceConnected();
-
-            broadcastCameraStatus(
-                "online"
+            console.log(
+                "CAMERA CONNECTION:",
+                state
             );
-        }
 
 
-        if (
-            state === "failed" ||
-            state === "disconnected"
-        ) {
+            if (
+                state ===
+                "connected"
+            ) {
 
-            setCameraDeviceDisconnected();
-        }
-    };
+                setCameraDeviceConnected();
+
+                broadcastCameraStatus(
+                    "online"
+                );
+            }
+
+
+            if (
+                state ===
+                    "failed" ||
+                state ===
+                    "disconnected"
+            ) {
+
+                setCameraDeviceDisconnected();
+            }
+        };
+
+
+    peer.oniceconnectionstatechange =
+        () => {
+
+            console.log(
+                "CAMERA ICE:",
+                peer.iceConnectionState
+            );
+        };
 
 
     /* -----------------------------------------------------
-       REMOTE DIRECTOR TRACKS
+       REMOTE DESCRIPTION
        ----------------------------------------------------- */
-
-    peer.ontrack = () => {
-        // Die Kamera sendet aktuell nur.
-    };
-
 
     try {
 
@@ -882,6 +1091,10 @@ async function handleCameraOffer(payload) {
             )
         );
 
+
+        /* -------------------------------------------------
+           ADD ANSWER
+           ------------------------------------------------- */
 
         const answer =
             await peer.createAnswer();
@@ -898,29 +1111,34 @@ async function handleCameraOffer(payload) {
 
             type: "answer",
 
-            camera: cameraNumber,
+            camera:
+                cameraNumber,
 
             answer: {
+
                 type:
-                    peer.localDescription.type,
+                    peer.localDescription
+                        .type,
 
                 sdp:
-                    peer.localDescription.sdp
+                    peer.localDescription
+                        .sdp
             }
         });
 
 
         console.log(
-            "Answer an Regie gesendet"
+            "ANSWER AN REGIE GESENDET"
         );
 
 
         setCameraDeviceConnecting();
 
+
     } catch (error) {
 
         console.error(
-            "Camera Offer Fehler:",
+            "CAMERA OFFER FEHLER:",
             error
         );
     }
@@ -931,18 +1149,22 @@ async function handleCameraOffer(payload) {
    DIRECTOR RECEIVES ANSWER
    ========================================================= */
 
-async function handleCameraAnswer(payload) {
+async function handleCameraAnswer(
+    payload
+) {
 
     const cam =
         Number(payload.camera);
 
+
     const peer =
         directorPeers[cam];
+
 
     if (!peer) {
 
         console.warn(
-            `Kein Peer für CAM ${cam}`
+            `Kein Peer CAM ${cam}`
         );
 
         return;
@@ -957,14 +1179,21 @@ async function handleCameraAnswer(payload) {
             )
         );
 
+
         console.log(
-            `Answer CAM ${cam} akzeptiert`
+            `ANSWER CAM ${cam} AKZEPTIERT`
         );
+
+
+        await flushDirectorIce(
+            cam
+        );
+
 
     } catch (error) {
 
         console.error(
-            `Answer CAM ${cam}:`,
+            `ANSWER CAM ${cam}:`,
             error
         );
     }
@@ -975,15 +1204,44 @@ async function handleCameraAnswer(payload) {
    DIRECTOR ICE
    ========================================================= */
 
-async function handleDirectorICE(payload) {
+async function handleDirectorICE(
+    payload
+) {
 
     const cam =
         Number(payload.camera);
 
+
     const peer =
         directorPeers[cam];
 
-    if (!peer) return;
+
+    if (!peer) {
+        return;
+    }
+
+
+    if (
+        !peer.remoteDescription
+    ) {
+
+        if (
+            !pendingIceCandidates[cam]
+        ) {
+
+            pendingIceCandidates[cam] =
+                [];
+        }
+
+
+        pendingIceCandidates[cam]
+            .push(
+                payload.candidate
+            );
+
+        return;
+    }
+
 
     try {
 
@@ -996,7 +1254,7 @@ async function handleDirectorICE(payload) {
     } catch (error) {
 
         console.error(
-            `ICE CAM ${cam}:`,
+            `DIRECTOR ICE CAM ${cam}:`,
             error
         );
     }
@@ -1007,9 +1265,36 @@ async function handleDirectorICE(payload) {
    CAMERA ICE
    ========================================================= */
 
-async function handleCameraICE(payload) {
+async function handleCameraICE(
+    payload
+) {
 
-    if (!cameraPeer) return;
+    if (!cameraPeer) {
+        return;
+    }
+
+
+    if (
+        !cameraPeer.remoteDescription
+    ) {
+
+        if (
+            !pendingIceCandidates.camera
+        ) {
+
+            pendingIceCandidates.camera =
+                [];
+        }
+
+
+        pendingIceCandidates.camera
+            .push(
+                payload.candidate
+            );
+
+        return;
+    }
+
 
     try {
 
@@ -1022,7 +1307,7 @@ async function handleCameraICE(payload) {
     } catch (error) {
 
         console.error(
-            "Camera ICE:",
+            "CAMERA ICE FEHLER:",
             error
         );
     }
@@ -1030,7 +1315,111 @@ async function handleCameraICE(payload) {
 
 
 /* =========================================================
-   REMOTE VIDEO
+   FLUSH DIRECTOR ICE
+   ========================================================= */
+
+async function flushDirectorIce(
+    cam
+) {
+
+    const peer =
+        directorPeers[cam];
+
+
+    const candidates =
+        pendingIceCandidates[cam];
+
+
+    if (
+        !peer ||
+        !candidates ||
+        !candidates.length
+    ) {
+        return;
+    }
+
+
+    for (
+        const candidate
+        of candidates
+    ) {
+
+        try {
+
+            await peer.addIceCandidate(
+                new RTCIceCandidate(
+                    candidate
+                )
+            );
+
+        } catch (error) {
+
+            console.error(
+                "ICE FLUSH:",
+                error
+            );
+        }
+    }
+
+
+    pendingIceCandidates[cam] =
+        [];
+}
+
+
+/* =========================================================
+   FLUSH CAMERA ICE
+   ========================================================= */
+
+async function flushCameraIce() {
+
+    if (!cameraPeer) {
+        return;
+    }
+
+
+    const candidates =
+        pendingIceCandidates.camera;
+
+
+    if (
+        !candidates ||
+        !candidates.length
+    ) {
+        return;
+    }
+
+
+    for (
+        const candidate
+        of candidates
+    ) {
+
+        try {
+
+            await cameraPeer.addIceCandidate(
+                new RTCIceCandidate(
+                    candidate
+                )
+            );
+
+        } catch (error) {
+
+            console.error(
+                "CAMERA ICE FLUSH:",
+                error
+            );
+        }
+    }
+
+
+    pendingIceCandidates.camera =
+        [];
+}
+
+
+/* =========================================================
+   REMOTE STREAM → MULTIVIEW
    ========================================================= */
 
 function attachRemoteStream(
@@ -1041,24 +1430,59 @@ function attachRemoteStream(
     const video =
         $(`cameraVideo${cam}`);
 
-    const placeholder =
-        $(`cameraPlaceholder${cam}`);
 
-    if (!video) return;
+    if (!video) {
+        return;
+    }
 
 
     video.srcObject =
         stream;
 
 
+    /* -----------------------------------------------------
+       MULTIVIEW IS MUTED
+       ----------------------------------------------------- */
+
     video.muted = true;
+
+    video.autoplay = true;
+
+    video.playsInline = true;
+
+
+    video.setAttribute(
+        "autoplay",
+        ""
+    );
+
+    video.setAttribute(
+        "playsinline",
+        ""
+    );
+
+    video.setAttribute(
+        "muted",
+        ""
+    );
 
 
     video.play()
-        .catch(() => {});
+        .catch(error => {
+
+            console.log(
+                `CAM ${cam} Multiview autoplay:`,
+                error
+            );
+        });
+
+
+    const placeholder =
+        $(`cameraPlaceholder${cam}`);
 
 
     if (placeholder) {
+
         placeholder.classList.add(
             "hidden"
         );
@@ -1067,6 +1491,7 @@ function attachRemoteStream(
 
     const status =
         $(`cameraStatus${cam}`);
+
 
     if (status) {
 
@@ -1086,7 +1511,9 @@ function attachRemoteStream(
     const device =
         $(`cameraDevice${cam}`);
 
+
     if (device) {
+
         device.textContent =
             "WEBRTC CAMERA";
     }
@@ -1095,7 +1522,10 @@ function attachRemoteStream(
     updateOnlineCountFromCards();
 
 
-    if (currentCamera === cam) {
+    if (
+        currentCamera ===
+        cam
+    ) {
 
         updateProgramVideo();
     }
@@ -1103,12 +1533,97 @@ function attachRemoteStream(
 
 
 /* =========================================================
-   PROGRAM
+   CAMERA STATUS UI
    ========================================================= */
 
-function selectCamera(cam) {
+function setCameraConnecting(
+    cam,
+    device
+) {
 
-    cam = Number(cam);
+    const status =
+        $(`cameraStatus${cam}`);
+
+
+    const deviceElement =
+        $(`cameraDevice${cam}`);
+
+
+    if (status) {
+
+        status.textContent =
+            "CONNECTING";
+
+        status.classList.remove(
+            "waiting"
+        );
+
+        status.classList.add(
+            "online"
+        );
+    }
+
+
+    if (deviceElement) {
+
+        deviceElement.textContent =
+            device ||
+            "CONNECTING";
+    }
+}
+
+
+function setCameraLive(
+    cam
+) {
+
+    const status =
+        $(`cameraStatus${cam}`);
+
+
+    const placeholder =
+        $(`cameraPlaceholder${cam}`);
+
+
+    if (status) {
+
+        status.textContent =
+            "LIVE";
+
+        status.classList.remove(
+            "waiting"
+        );
+
+        status.classList.add(
+            "online"
+        );
+    }
+
+
+    if (placeholder) {
+
+        placeholder.classList.add(
+            "hidden"
+        );
+    }
+
+
+    updateOnlineCountFromCards();
+}
+
+
+function handleCameraStatus(
+    payload
+) {
+
+    if (isCameraMode) {
+        return;
+    }
+
+
+    const cam =
+        Number(payload.camera);
+
 
     if (
         cam < 1 ||
@@ -1117,11 +1632,175 @@ function selectCamera(cam) {
         return;
     }
 
-    currentCamera = cam;
+
+    if (
+        payload.status ===
+        "online"
+    ) {
+
+        setCameraLive(
+            cam
+        );
+    }
+
+
+    if (
+        payload.status ===
+        "offline"
+    ) {
+
+        setCameraOffline(
+            cam
+        );
+    }
+}
+
+
+function setCameraOffline(
+    cam
+) {
+
+    const status =
+        $(`cameraStatus${cam}`);
+
+
+    const placeholder =
+        $(`cameraPlaceholder${cam}`);
+
+
+    const device =
+        $(`cameraDevice${cam}`);
+
+
+    if (status) {
+
+        status.textContent =
+            "WAITING";
+
+        status.classList.remove(
+            "online"
+        );
+
+        status.classList.add(
+            "waiting"
+        );
+    }
+
+
+    if (placeholder) {
+
+        placeholder.classList.remove(
+            "hidden"
+        );
+    }
+
+
+    if (device) {
+
+        device.textContent =
+            "NO DEVICE";
+    }
+
+
+    updateOnlineCountFromCards();
+}
+
+
+/* =========================================================
+   ONLINE COUNT
+   ========================================================= */
+
+function updateOnlineCountFromCards() {
+
+    let count = 0;
+
+
+    for (
+        let i = 1;
+        i <= MAX_CAMERAS;
+        i++
+    ) {
+
+        const status =
+            $(`cameraStatus${i}`);
+
+
+        if (
+            status &&
+            (
+                status.textContent ===
+                    "LIVE" ||
+                status.textContent ===
+                    "ONLINE"
+            )
+        ) {
+
+            count++;
+        }
+    }
+
+
+    updateOnlineCount(
+        count
+    );
+}
+
+
+function updateOnlineCount(
+    count
+) {
+
+    const onlineCount =
+        $("onlineCount");
+
+
+    const systemText =
+        $("systemCameraText");
+
+
+    if (onlineCount) {
+
+        onlineCount.textContent =
+            count;
+    }
+
+
+    if (systemText) {
+
+        systemText.textContent =
+            `${count} CAMERAS ONLINE`;
+    }
+}
+
+
+/* =========================================================
+   PROGRAM SWITCHING
+   ========================================================= */
+
+function selectCamera(
+    cam
+) {
+
+    cam =
+        Number(cam);
+
+
+    if (
+        cam < 1 ||
+        cam > MAX_CAMERAS
+    ) {
+        return;
+    }
+
+
+    currentCamera =
+        cam;
+
 
     updateProgramUI();
 
     updateProgramVideo();
+
 
     notify(
         `PROGRAM → CAM ${cam}`
@@ -1129,20 +1808,29 @@ function selectCamera(cam) {
 }
 
 
+/* =========================================================
+   PROGRAM UI
+   ========================================================= */
+
 function updateProgramUI() {
 
     const programCamera =
         $("programCamera");
 
+
     const programCameraBig =
         $("programCameraBig");
 
+
     if (programCamera) {
+
         programCamera.textContent =
             currentCamera;
     }
 
+
     if (programCameraBig) {
+
         programCameraBig.textContent =
             currentCamera;
     }
@@ -1157,8 +1845,10 @@ function updateProgramUI() {
         const card =
             $(`cameraCard${i}`);
 
+
         const button =
             $(`cameraButton${i}`);
+
 
         const badge =
             $(`cameraProgramBadge${i}`);
@@ -1193,35 +1883,72 @@ function updateProgramUI() {
 }
 
 
+/* =========================================================
+   PROGRAM VIDEO
+   ========================================================= */
+
 function updateProgramVideo() {
 
     const programVideo =
         $("programVideo");
 
+
     const placeholder =
         $("programPlaceholder");
 
-    if (!programVideo) return;
+
+    if (!programVideo) {
+        return;
+    }
 
 
     const stream =
-        remoteStreams[currentCamera];
+        remoteStreams[
+            currentCamera
+        ];
 
 
     if (
         stream &&
-        stream.getTracks().length > 0
+        stream.getVideoTracks()
+            .length > 0
     ) {
 
         programVideo.srcObject =
             stream;
 
+
+        /*
+           PROGRAM darf Audio abspielen.
+           Der Benutzer muss gegebenenfalls
+           einmal auf der Seite klicken.
+        */
+
+        programVideo.muted =
+            false;
+
+
+        programVideo.autoplay =
+            true;
+
+
+        programVideo.playsInline =
+            true;
+
+
         programVideo
             .play()
-            .catch(() => {});
+            .catch(error => {
+
+                console.log(
+                    "PROGRAM Audio/Video autoplay:",
+                    error
+                );
+            });
 
 
         if (placeholder) {
+
             placeholder.classList.add(
                 "hidden"
             );
@@ -1232,7 +1959,9 @@ function updateProgramVideo() {
         programVideo.srcObject =
             null;
 
+
         if (placeholder) {
+
             placeholder.classList.remove(
                 "hidden"
             );
@@ -1245,26 +1974,39 @@ function updateProgramVideo() {
    CUT
    ========================================================= */
 
-function cutToCamera(cam) {
+function cutToCamera(
+    cam
+) {
 
-    selectCamera(cam);
+    selectCamera(
+        cam
+    );
+
 
     const monitor =
         $("programMonitor");
 
-    if (!monitor) return;
+
+    if (!monitor) {
+        return;
+    }
+
 
     monitor.classList.add(
         "cut-flash"
     );
 
-    setTimeout(() => {
 
-        monitor.classList.remove(
-            "cut-flash"
-        );
+    setTimeout(
+        () => {
 
-    }, 180);
+            monitor.classList.remove(
+                "cut-flash"
+            );
+
+        },
+        180
+    );
 }
 
 
@@ -1272,14 +2014,20 @@ function cutToCamera(cam) {
    FADE
    ========================================================= */
 
-function fadeToCamera(cam) {
+function fadeToCamera(
+    cam
+) {
 
     const monitor =
         $("programMonitor");
 
+
     if (!monitor) {
 
-        selectCamera(cam);
+        selectCamera(
+            cam
+        );
+
         return;
     }
 
@@ -1289,20 +2037,28 @@ function fadeToCamera(cam) {
     );
 
 
-    setTimeout(() => {
+    setTimeout(
+        () => {
 
-        selectCamera(cam);
+            selectCamera(
+                cam
+            );
 
-    }, 250);
+        },
+        250
+    );
 
 
-    setTimeout(() => {
+    setTimeout(
+        () => {
 
-        monitor.classList.remove(
-            "fade-transition"
-        );
+            monitor.classList.remove(
+                "fade-transition"
+            );
 
-    }, 600);
+        },
+        600
+    );
 }
 
 
@@ -1321,13 +2077,19 @@ function setupCameraButtons() {
         const button =
             $(`cameraButton${i}`);
 
-        if (!button) continue;
+
+        if (!button) {
+            continue;
+        }
+
 
         button.addEventListener(
             "click",
             () => {
 
-                selectCamera(i);
+                selectCamera(
+                    i
+                );
             }
         );
     }
@@ -1335,7 +2097,7 @@ function setupCameraButtons() {
 
 
 /* =========================================================
-   TRANSITION BUTTONS
+   DIRECTOR CONTROLS
    ========================================================= */
 
 function setupDirectorControls() {
@@ -1343,8 +2105,10 @@ function setupDirectorControls() {
     const cutButton =
         $("cutButton");
 
+
     const fadeButton =
         $("fadeButton");
+
 
     const recordButton =
         $("recordButton");
@@ -1359,13 +2123,19 @@ function setupDirectorControls() {
                 let next =
                     currentCamera + 1;
 
+
                 if (
-                    next > MAX_CAMERAS
+                    next >
+                    MAX_CAMERAS
                 ) {
+
                     next = 1;
                 }
 
-                cutToCamera(next);
+
+                cutToCamera(
+                    next
+                );
             }
         );
     }
@@ -1380,13 +2150,19 @@ function setupDirectorControls() {
                 let next =
                     currentCamera + 1;
 
+
                 if (
-                    next > MAX_CAMERAS
+                    next >
+                    MAX_CAMERAS
                 ) {
+
                     next = 1;
                 }
 
-                fadeToCamera(next);
+
+                fadeToCamera(
+                    next
+                );
             }
         );
     }
@@ -1410,7 +2186,7 @@ function setupKeyboard() {
 
     document.addEventListener(
         "keydown",
-        (event) => {
+        event => {
 
             if (
                 event.target.tagName ===
@@ -1428,7 +2204,7 @@ function setupKeyboard() {
                 event.key.toLowerCase();
 
 
-            /* 1-9 = CAMERA */
+            /* 1-9 */
 
             if (
                 key >= "1" &&
@@ -1452,16 +2228,23 @@ function setupKeyboard() {
 
                 event.preventDefault();
 
+
                 let next =
                     currentCamera + 1;
 
+
                 if (
-                    next > MAX_CAMERAS
+                    next >
+                    MAX_CAMERAS
                 ) {
+
                     next = 1;
                 }
 
-                cutToCamera(next);
+
+                cutToCamera(
+                    next
+                );
 
                 return;
             }
@@ -1474,13 +2257,19 @@ function setupKeyboard() {
                 let next =
                     currentCamera + 1;
 
+
                 if (
-                    next > MAX_CAMERAS
+                    next >
+                    MAX_CAMERAS
                 ) {
+
                     next = 1;
                 }
 
-                fadeToCamera(next);
+
+                fadeToCamera(
+                    next
+                );
 
                 return;
             }
@@ -1496,7 +2285,7 @@ function setupKeyboard() {
             }
 
 
-            /* ESC = STOP RECORDING */
+            /* ESC */
 
             if (
                 event.key ===
@@ -1504,10 +2293,10 @@ function setupKeyboard() {
             ) {
 
                 if (recording) {
+
                     stopRecording();
                 }
             }
-
         }
     );
 }
@@ -1530,41 +2319,40 @@ function toggleRecording() {
 }
 
 
-/*
-   Aktuell wird hier der Aufnahme-Zustand
-   und Timer gesteuert.
-
-   Die echte kombinierte MediaRecorder-Aufnahme
-   kommt als nächster Schritt.
-*/
-
 function startRecording() {
 
-    if (recording) return;
+    if (recording) {
+        return;
+    }
 
-    recording = true;
+
+    recording =
+        true;
+
 
     recordingStartTime =
         Date.now();
 
 
-    const recordStatus =
+    const status =
         $("recordStatus");
 
-    const recordButton =
+
+    const button =
         $("recordButton");
 
 
-    if (recordStatus) {
-        recordStatus.classList.add(
+    if (status) {
+
+        status.classList.add(
             "recording"
         );
     }
 
 
-    if (recordButton) {
+    if (button) {
 
-        recordButton.classList.add(
+        button.classList.add(
             "recording"
         );
     }
@@ -1588,9 +2376,13 @@ function startRecording() {
 
 function stopRecording() {
 
-    if (!recording) return;
+    if (!recording) {
+        return;
+    }
 
-    recording = false;
+
+    recording =
+        false;
 
 
     clearInterval(
@@ -1602,22 +2394,25 @@ function stopRecording() {
         null;
 
 
-    const recordStatus =
+    const status =
         $("recordStatus");
 
-    const recordButton =
+
+    const button =
         $("recordButton");
 
 
-    if (recordStatus) {
-        recordStatus.classList.remove(
+    if (status) {
+
+        status.classList.remove(
             "recording"
         );
     }
 
 
-    if (recordButton) {
-        recordButton.classList.remove(
+    if (button) {
+
+        button.classList.remove(
             "recording"
         );
     }
@@ -1634,7 +2429,10 @@ function updateRecordingTimer() {
     const timer =
         $("recordTimer");
 
-    if (!timer) return;
+
+    if (!timer) {
+        return;
+    }
 
 
     if (!recording) {
@@ -1662,10 +2460,13 @@ function updateRecordingTimer() {
             totalSeconds / 3600
         );
 
+
     const minutes =
         Math.floor(
-            (totalSeconds % 3600) / 60
+            (totalSeconds % 3600) /
+            60
         );
+
 
     const seconds =
         totalSeconds % 60;
@@ -1687,7 +2488,10 @@ function updateProgramClock() {
     const element =
         $("programTime");
 
-    if (!element) return;
+
+    if (!element) {
+        return;
+    }
 
 
     const elapsed =
@@ -1706,10 +2510,13 @@ function updateProgramClock() {
             totalSeconds / 3600
         );
 
+
     const minutes =
         Math.floor(
-            (totalSeconds % 3600) / 60
+            (totalSeconds % 3600) /
+            60
         );
+
 
     const seconds =
         totalSeconds % 60;
@@ -1726,7 +2533,8 @@ function updateProgramClock() {
    QR CODE
    ========================================================= */
 
-let selectedQrCamera = 1;
+let selectedQrCamera =
+    1;
 
 
 function setupQr() {
@@ -1734,11 +2542,13 @@ function setupQr() {
     const qrButton =
         $("qrButton");
 
-    const qrModal =
-        $("qrModal");
 
-    const closeQr =
+    const closeButton =
         $("closeQr");
+
+
+    const modal =
+        $("qrModal");
 
 
     if (qrButton) {
@@ -1747,36 +2557,34 @@ function setupQr() {
             "click",
             () => {
 
-                selectedQrCamera =
-                    currentCamera;
-
                 openQrModal(
-                    selectedQrCamera
+                    currentCamera
                 );
             }
         );
     }
 
 
-    if (closeQr) {
+    if (closeButton) {
 
-        closeQr.addEventListener(
+        closeButton.addEventListener(
             "click",
             closeQrModal
         );
     }
 
 
-    if (qrModal) {
+    if (modal) {
 
-        qrModal.addEventListener(
+        modal.addEventListener(
             "click",
-            (event) => {
+            event => {
 
                 if (
                     event.target ===
-                    qrModal
+                    modal
                 ) {
+
                     closeQrModal();
                 }
             }
@@ -1788,116 +2596,136 @@ function setupQr() {
         .querySelectorAll(
             "[data-qr-camera]"
         )
-        .forEach(button => {
+        .forEach(
+            button => {
 
-            button.addEventListener(
-                "click",
-                () => {
+                button.addEventListener(
+                    "click",
+                    () => {
 
-                    const cam =
-                        Number(
-                            button.dataset
-                                .qrCamera
+                        openQrModal(
+                            Number(
+                                button.dataset
+                                    .qrCamera
+                            )
                         );
-
-                    openQrModal(cam);
-                }
-            );
-        });
+                    }
+                );
+            }
+        );
 }
 
 
-function openQrModal(cam) {
+function openQrModal(
+    cam
+) {
 
-    selectedQrCamera = cam;
+    selectedQrCamera =
+        cam;
 
 
     const modal =
         $("qrModal");
 
+
     const selected =
         $("qrSelectedCamera");
+
 
     const qr =
         $("qrcode");
 
-    const qrUrlText =
+
+    const urlText =
         $("qrUrlText");
 
 
     if (selected) {
+
         selected.textContent =
             cam;
     }
 
 
     if (modal) {
+
         modal.classList.remove(
             "hidden"
         );
     }
 
 
-    if (qr) {
-
-        qr.innerHTML = "";
-
-        const cameraUrl =
-            new URL(
-                window.location.href
-            );
+    if (!qr) {
+        return;
+    }
 
 
-        cameraUrl.search = "";
+    qr.innerHTML =
+        "";
 
 
-        cameraUrl.searchParams.set(
-            "mode",
-            "camera"
-        );
-
-        cameraUrl.searchParams.set(
-            "session",
-            sessionId
-        );
-
-        cameraUrl.searchParams.set(
-            "cam",
-            cam
+    const cameraUrl =
+        new URL(
+            window.location.href
         );
 
 
-        if (
-            typeof QRCode !==
-            "undefined"
-        ) {
+    cameraUrl.search =
+        "";
 
-            new QRCode(qr, {
+
+    cameraUrl.searchParams.set(
+        "mode",
+        "camera"
+    );
+
+
+    cameraUrl.searchParams.set(
+        "session",
+        sessionId
+    );
+
+
+    cameraUrl.searchParams.set(
+        "cam",
+        cam
+    );
+
+
+    if (
+        typeof QRCode !==
+        "undefined"
+    ) {
+
+        new QRCode(
+            qr,
+            {
 
                 text:
                     cameraUrl.toString(),
 
-                width: 230,
+                width:
+                    230,
 
-                height: 230,
+                height:
+                    230,
 
                 correctLevel:
                     QRCode.CorrectLevel.M
+            }
+        );
 
-            });
+    } else {
 
-        } else {
-
-            qr.textContent =
-                "QR-Code Bibliothek nicht geladen.";
-        }
+        qr.textContent =
+            "QR-Code Bibliothek nicht geladen.";
+    }
 
 
-        if (qrUrlText) {
+    if (urlText) {
 
-            qrUrlText.textContent =
-                cameraUrl.toString();
-        }
+        urlText.textContent =
+            cameraUrl.toString();
     }
 }
 
@@ -1906,6 +2734,7 @@ function closeQrModal() {
 
     const modal =
         $("qrModal");
+
 
     if (modal) {
 
@@ -1917,22 +2746,29 @@ function closeQrModal() {
 
 
 /* =========================================================
-   CAMERA DEVICE MODE
+   CAMERA DEVICE
    ========================================================= */
 
 async function startLocalCamera() {
 
-    if (!isCameraMode) return;
+    if (!isCameraMode) {
+        return;
+    }
 
 
     const video =
         $("localCameraVideo");
+
 
     const placeholder =
         $("localCameraPlaceholder");
 
 
     try {
+
+        /* -------------------------------------------------
+           STOP OLD STREAM
+           ------------------------------------------------- */
 
         if (localStream) {
 
@@ -1945,27 +2781,93 @@ async function startLocalCamera() {
         }
 
 
+        /* -------------------------------------------------
+           GET CAMERA + MICROPHONE
+           ------------------------------------------------- */
+
         localStream =
             await navigator.mediaDevices
                 .getUserMedia({
 
                     video: {
+
                         facingMode:
-                            "environment"
+                            "environment",
+
+                        width: {
+                            ideal: 1280
+                        },
+
+                        height: {
+                            ideal: 720
+                        },
+
+                        frameRate: {
+                            ideal: 30
+                        }
                     },
 
                     audio: true
-
                 });
 
+
+        console.log(
+            "LOCAL STREAM:",
+            localStream
+        );
+
+
+        /* -------------------------------------------------
+           SHOW LOCAL VIDEO
+           ------------------------------------------------- */
 
         if (video) {
 
             video.srcObject =
                 localStream;
 
-            await video.play()
-                .catch(() => {});
+
+            video.muted =
+                true;
+
+
+            video.autoplay =
+                true;
+
+
+            video.playsInline =
+                true;
+
+
+            video.setAttribute(
+                "muted",
+                ""
+            );
+
+
+            video.setAttribute(
+                "autoplay",
+                ""
+            );
+
+
+            video.setAttribute(
+                "playsinline",
+                ""
+            );
+
+
+            try {
+
+                await video.play();
+
+            } catch (error) {
+
+                console.error(
+                    "LOCAL VIDEO PLAY:",
+                    error
+                );
+            }
         }
 
 
@@ -1979,38 +2881,19 @@ async function startLocalCamera() {
 
         updateCameraDeviceInfo();
 
+
         setCameraDeviceReady();
 
 
         await publishPresence();
+
 
         await broadcastCameraStatus(
             "online"
         );
 
 
-        await sendCameraHello();
-
-
-        /*
-           Noch einmal senden, falls die Regie
-           gerade erst den Channel geöffnet hat.
-        */
-
-        setTimeout(
-            sendCameraHello,
-            1000
-        );
-
-        setTimeout(
-            sendCameraHello,
-            2500
-        );
-
-        setTimeout(
-            sendCameraHello,
-            5000
-        );
+        startCameraHelloLoop();
 
 
         notify(
@@ -2021,7 +2904,7 @@ async function startLocalCamera() {
     } catch (error) {
 
         console.error(
-            "Kamera Fehler:",
+            "GET USER MEDIA FEHLER:",
             error
         );
 
@@ -2037,12 +2920,15 @@ async function startLocalCamera() {
 
 
 /* =========================================================
-   CAMERA SWITCH
+   SWITCH CAMERA
    ========================================================= */
 
 async function switchCamera() {
 
-    if (!isCameraMode) return;
+    if (!isCameraMode) {
+        return;
+    }
+
 
     if (!localStream) {
 
@@ -2052,11 +2938,12 @@ async function switchCamera() {
     }
 
 
-    const currentVideoTrack =
-        localStream.getVideoTracks()[0];
+    const oldTrack =
+        localStream
+            .getVideoTracks()[0];
 
 
-    if (!currentVideoTrack) {
+    if (!oldTrack) {
 
         await startLocalCamera();
 
@@ -2064,12 +2951,12 @@ async function switchCamera() {
     }
 
 
-    const currentSettings =
-        currentVideoTrack.getSettings();
+    const settings =
+        oldTrack.getSettings();
 
 
     const currentFacing =
-        currentSettings.facingMode ||
+        settings.facingMode ||
         "environment";
 
 
@@ -2087,59 +2974,78 @@ async function switchCamera() {
                 .getUserMedia({
 
                     video: {
+
                         facingMode:
-                            newFacing
+                            newFacing,
+
+                        width: {
+                            ideal: 1280
+                        },
+
+                        height: {
+                            ideal: 720
+                        },
+
+                        frameRate: {
+                            ideal: 30
+                        }
                     },
 
                     audio: false
-
                 });
 
 
-        const newVideoTrack =
-            newStream.getVideoTracks()[0];
+        const newTrack =
+            newStream
+                .getVideoTracks()[0];
 
 
-        currentVideoTrack.stop();
-
-
-        const videoSender =
+        const sender =
             cameraPeer
                 ? cameraPeer
                     .getSenders()
                     .find(
-                        sender =>
-                            sender.track &&
-                            sender.track.kind ===
+                        item =>
+                            item.track &&
+                            item.track.kind ===
                             "video"
                     )
                 : null;
 
 
-        if (videoSender) {
+        if (sender) {
 
-            await videoSender.replaceTrack(
-                newVideoTrack
+            await sender.replaceTrack(
+                newTrack
             );
         }
 
 
+        oldTrack.stop();
+
+
         localStream.removeTrack(
-            currentVideoTrack
+            oldTrack
         );
 
+
         localStream.addTrack(
-            newVideoTrack
+            newTrack
         );
 
 
         const video =
             $("localCameraVideo");
 
+
         if (video) {
 
             video.srcObject =
                 localStream;
+
+
+            video.play()
+                .catch(() => {});
         }
 
 
@@ -2151,9 +3057,10 @@ async function switchCamera() {
     } catch (error) {
 
         console.error(
-            "Kamera wechseln:",
+            "SWITCH CAMERA:",
             error
         );
+
 
         notify(
             "KAMERA KANN NICHT GEWECHSELT WERDEN"
@@ -2163,22 +3070,28 @@ async function switchCamera() {
 
 
 /* =========================================================
-   CAMERA STATUS
+   CAMERA STATUS BROADCAST
    ========================================================= */
 
 async function broadcastCameraStatus(
     status
 ) {
 
-    if (!isCameraMode) return;
+    if (!isCameraMode) {
+        return;
+    }
+
 
     await broadcast({
 
-        event: "camera-status",
+        event:
+            "camera-status",
 
-        camera: cameraNumber,
+        camera:
+            cameraNumber,
 
-        status: status,
+        status:
+            status,
 
         device:
             navigator.userAgent
@@ -2187,7 +3100,7 @@ async function broadcastCameraStatus(
 
 
 /* =========================================================
-   CAMERA UI STATES
+   CAMERA UI
    ========================================================= */
 
 function setCameraDeviceReady() {
@@ -2195,30 +3108,39 @@ function setCameraDeviceReady() {
     const status =
         $("deviceStatusText");
 
+
     const mic =
         $("deviceMicText");
 
+
     const modeStatus =
         $("cameraModeStatus");
+
 
     const dot =
         $("cameraModeDot");
 
 
     if (status) {
+
         status.textContent =
             "BEREIT";
     }
 
+
     if (mic) {
+
         mic.textContent =
             "AKTIV";
     }
 
+
     if (modeStatus) {
+
         modeStatus.textContent =
             "CAMERA READY";
     }
+
 
     if (dot) {
 
@@ -2238,16 +3160,20 @@ function setCameraDeviceConnecting() {
     const status =
         $("deviceStatusText");
 
+
     const modeStatus =
         $("cameraModeStatus");
 
 
     if (status) {
+
         status.textContent =
             "VERBINDET";
     }
 
+
     if (modeStatus) {
+
         modeStatus.textContent =
             "CONNECTING...";
     }
@@ -2259,22 +3185,28 @@ function setCameraDeviceConnected() {
     const status =
         $("deviceStatusText");
 
+
     const modeStatus =
         $("cameraModeStatus");
+
 
     const dot =
         $("cameraModeDot");
 
 
     if (status) {
+
         status.textContent =
             "LIVE";
     }
 
+
     if (modeStatus) {
+
         modeStatus.textContent =
             "CAMERA LIVE";
     }
+
 
     if (dot) {
 
@@ -2294,22 +3226,28 @@ function setCameraDeviceDisconnected() {
     const status =
         $("deviceStatusText");
 
+
     const modeStatus =
         $("cameraModeStatus");
+
 
     const dot =
         $("cameraModeDot");
 
 
     if (status) {
+
         status.textContent =
             "GETRENNT";
     }
 
+
     if (modeStatus) {
+
         modeStatus.textContent =
             "DISCONNECTED";
     }
+
 
     if (dot) {
 
@@ -2329,24 +3267,31 @@ function setCameraDeviceError() {
     const status =
         $("deviceStatusText");
 
+
     const mic =
         $("deviceMicText");
+
 
     const modeStatus =
         $("cameraModeStatus");
 
 
     if (status) {
+
         status.textContent =
             "FEHLER";
     }
 
+
     if (mic) {
+
         mic.textContent =
             "NICHT VERFÜGBAR";
     }
 
+
     if (modeStatus) {
+
         modeStatus.textContent =
             "CAMERA ERROR";
     }
@@ -2358,7 +3303,8 @@ function updateCameraDeviceInfo() {
     const cameraText =
         $("deviceCameraText");
 
-    const selectedNumber =
+
+    const selected =
         $("selectedCameraNumber");
 
 
@@ -2369,9 +3315,9 @@ function updateCameraDeviceInfo() {
     }
 
 
-    if (selectedNumber) {
+    if (selected) {
 
-        selectedNumber.textContent =
+        selected.textContent =
             cameraNumber;
     }
 }
@@ -2396,10 +3342,12 @@ function setupCameraMode() {
     const cameraMode =
         $("cameraMode");
 
+
     const controlRoom =
         document.querySelector(
             ".control-room"
         );
+
 
     const topbar =
         document.querySelector(
@@ -2435,6 +3383,7 @@ function setupCameraMode() {
     const startButton =
         $("startCameraButton");
 
+
     const switchButton =
         $("switchCameraButton");
 
@@ -2459,7 +3408,7 @@ function setupCameraMode() {
 
 
 /* =========================================================
-   REGIE MODE SETUP
+   DIRECTOR MODE SETUP
    ========================================================= */
 
 function setupDirectorMode() {
@@ -2479,12 +3428,14 @@ function setupDirectorMode() {
 
     updateProgramUI();
 
-    updateOnlineCount(0);
+    updateOnlineCount(
+        0
+    );
 }
 
 
 /* =========================================================
-   AUDIO METER VISUAL
+   AUDIO METER
    ========================================================= */
 
 function animateAudioMeter() {
@@ -2492,7 +3443,10 @@ function animateAudioMeter() {
     const meter =
         $("audioMeter");
 
-    if (!meter) return;
+
+    if (!meter) {
+        return;
+    }
 
 
     const bars =
@@ -2507,6 +3461,7 @@ function animateAudioMeter() {
             const height =
                 Math.random() *
                 100;
+
 
             bar.style.height =
                 `${Math.max(
@@ -2531,6 +3486,16 @@ function animateAudioMeter() {
 window.addEventListener(
     "beforeunload",
     () => {
+
+        clearInterval(
+            cameraHelloInterval
+        );
+
+
+        clearInterval(
+            recordingTimerInterval
+        );
+
 
         if (localStream) {
 
@@ -2559,7 +3524,6 @@ window.addEventListener(
                 try {
                     peer.close();
                 } catch (_) {}
-
             }
         );
 
@@ -2567,7 +3531,9 @@ window.addEventListener(
         if (channel) {
 
             try {
+
                 channel.untrack();
+
             } catch (_) {}
         }
     }
@@ -2575,7 +3541,7 @@ window.addEventListener(
 
 
 /* =========================================================
-   START
+   START APPLICATION
    ========================================================= */
 
 document.addEventListener(
@@ -2583,7 +3549,7 @@ document.addEventListener(
     () => {
 
         console.log(
-            "================================="
+            "===================================="
         );
 
         console.log(
@@ -2591,25 +3557,27 @@ document.addEventListener(
         );
 
         console.log(
-            "Session:",
+            "SESSION:",
             sessionId
         );
 
         console.log(
-            "Camera Mode:",
+            "CAMERA MODE:",
             isCameraMode
         );
+
 
         if (isCameraMode) {
 
             console.log(
-                "Camera:",
+                "CAMERA:",
                 cameraNumber
             );
         }
 
+
         console.log(
-            "================================="
+            "===================================="
         );
 
 
@@ -2624,10 +3592,12 @@ document.addEventListener(
 
             setupDirectorMode();
 
+
             setInterval(
                 updateProgramClock,
                 1000
             );
+
 
             animateAudioMeter();
         }
