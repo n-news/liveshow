@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>LIVE REGIE</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <!-- =========================================
+         TOP BAR
+    ========================================== -->
+
+    <header class="topbar">
+
+        <div class="brand">
+            <div class="brand-icon">🎬</div>
+
+            <div>
+                <div class="brand-title">LIVE REGIE</div>
+                <div class="brand-subtitle">BROWSER PRODUCTION SYSTEM</div>
+            </div>
+        </div>
+
+        <div class="session-info">
+            <span class="status-dot"></span>
+            <span>SESSION ONLINE</span>
+        </div>
+
+        <div class="record-info">
+            <span class="record-dot"></span>
+            <span>REC</span>
+            <span id="recordTimer">00:00:00</span>
+        </div>
+
+    </header>
+
+
+    <!-- =========================================
+         MAIN
+    ========================================== -->
+
+    <main class="control-room">
+
+        <!-- =====================================
+             PROGRAM MONITOR
+        ====================================== -->
+
+        <section class="program-section">
+
+            <div class="section-header">
+
+                <div>
+                    <span class="section-label">PROGRAM</span>
+                    <span class="section-description">
+                        LIVE OUTPUT
+                    </span>
+                </div>
+
+                <div class="program-camera">
+                    CAM <span id="programCamera">1</span>
+                </div>
+
+            </div>
+
+
+            <div class="program-monitor">
+
+                <div class="monitor-placeholder" id="programPlaceholder">
+
+                    <div class="camera-number">
+                        CAM <span id="programCameraBig">1</span>
+                    </div>
+
+                    <div class="live-text">
+                        LIVE
+                    </div>
+
+                    <div class="waiting-text">
+                        Warten auf Kamera...
+                    </div>
+
+                </div>
+
+                <!-- Später kommt hier das echte Live-Video -->
+                <video
+                    id="programVideo"
+                    class="program-video"
+                    autoplay
+                    playsinline>
+                </video>
+
+                <div class="program-overlay">
+
+                    <div class="on-air">
+                        ● ON AIR
+                    </div>
+
+                    <div class="program-time" id="programTime">
+                        00:00:00
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- =====================================
+             CAMERA MULTIVIEW
+        ====================================== -->
+
+        <section class="multiview-section">
+
+            <div class="section-header">
+
+                <div>
+                    <span class="section-label">MULTIVIEW</span>
+                    <span class="section-description">
+                        CAMERA SOURCES
+                    </span>
+                </div>
+
+                <div class="camera-count">
+                    2 / 9 CAMERAS
+                </div>
+
+            </div>
+
+
+            <div class="camera-grid">
+
+
+                <!-- =============================
+                     CAMERA 1
+                ============================== -->
+
+                <div
+                    class="camera-card active"
+                    id="cameraCard1"
+                    data-camera="1">
+
+                    <div class="camera-card-header">
+
+                        <div class="camera-name">
+                            <span class="camera-number-small">01</span>
+                            CAM 1
+                        </div>
+
+                        <div class="camera-status online">
+                            <span></span>
+                            ONLINE
+                        </div>
+
+                    </div>
+
+
+                    <div class="camera-preview">
+
+                        <video
+                            id="cameraVideo1"
+                            autoplay
+                            muted
+                            playsinline>
+                        </video>
+
+                        <div class="preview-placeholder">
+
+                            <div class="preview-icon">
+                                📹
+                            </div>
+
+                            <div>
+                                CAMERA 1
+                            </div>
+
+                            <small>
+                                WAITING FOR SIGNAL
+                            </small>
+
+                        </div>
+
+                        <div class="preview-live">
+                            LIVE
+                        </div>
+
+                    </div>
+
+
+                    <div class="camera-card-footer">
+
+                        <span>
+                            DEVICE
+                        </span>
+
+                        <strong id="cameraDevice1">
+                            CAMERA 1
+                        </strong>
+
+                    </div>
+
+                </div>
+
+
+
+                <!-- =============================
+                     CAMERA 2
+                ============================== -->
+
+                <div
+                    class="camera-card"
+                    id="cameraCard2"
+                    data-camera="2">
+
+                    <div class="camera-card-header">
+
+                        <div class="camera-name">
+                            <span class="camera-number-small">02</span>
+                            CAM 2
+                        </div>
+
+                        <div class="camera-status waiting">
+                            <span></span>
+                            WAITING
+                        </div>
+
+                    </div>
+
+
+                    <div class="camera-preview">
+
+                        <video
+                            id="cameraVideo2"
+                            autoplay
+                            muted
+                            playsinline>
+                        </video>
+
+                        <div class="preview-placeholder">
+
+                            <div class="preview-icon">
+                                📹
+                            </div>
+
+                            <div>
+                                CAMERA 2
+                            </div>
+
+                            <small>
+                                WAITING FOR SIGNAL
+                            </small>
+
+                        </div>
+
+                        <div class="preview-live">
+                            LIVE
+                        </div>
+
+                    </div>
+
+
+                    <div class="camera-card-footer">
+
+                        <span>
+                            DEVICE
+                        </span>
+
+                        <strong id="cameraDevice2">
+                            CAMERA 2
+                        </strong>
+
+                    </div>
+
+                </div>
+
+
+            </div>
+
+        </section>
+
+
+        <!-- =====================================
+             DIRECTOR CONTROLS
+        ====================================== -->
+
+        <section class="director-section">
+
+            <div class="section-header">
+
+                <div>
+                    <span class="section-label">DIRECTOR</span>
+                    <span class="section-description">
+                        LIVE SWITCHING
+                    </span>
+                </div>
+
+                <div class="keyboard-hint">
+                    KEYBOARD CONTROL ENABLED
+                </div>
+
+            </div>
+
+
+            <div class="director-controls">
+
+
+                <!-- Camera 1 -->
+
+                <button
+                    class="camera-button active"
+                    id="cameraButton1"
+                    data-camera="1">
+
+                    <span class="button-number">
+                        1
+                    </span>
+
+                    <span class="button-camera">
+                        CAM 1
+                    </span>
+
+                    <span class="button-state">
+                        PROGRAM
+                    </span>
+
+                </button>
+
+
+                <!-- Camera 2 -->
+
+                <button
+                    class="camera-button"
+                    id="cameraButton2"
+                    data-camera="2">
+
+                    <span class="button-number">
+                        2
+                    </span>
+
+                    <span class="button-camera">
+                        CAM 2
+                    </span>
+
+                    <span class="button-state">
+                        PREVIEW
+                    </span>
+
+                </button>
+
+
+                <!-- Cut -->
+
+                <button
+                    class="action-button cut-button"
+                    id="cutButton">
+
+                    <span class="action-icon">
+                        ⚡
+                    </span>
+
+                    <span>
+                        CUT
+                    </span>
+
+                    <small>
+                        SPACE
+                    </small>
+
+                </button>
+
+
+                <!-- Fade -->
+
+                <button
+                    class="action-button fade-button"
+                    id="fadeButton">
+
+                    <span class="action-icon">
+                        ◐
+                    </span>
+
+                    <span>
+                        FADE
+                    </span>
+
+                    <small>
+                        F
+                    </small>
+
+                </button>
+
+
+            </div>
+
+        </section>
+
+
+        <!-- =====================================
+             AUDIO / SYSTEM
+        ====================================== -->
+
+        <section class="bottom-section">
+
+
+            <!-- AUDIO -->
+
+            <div class="audio-panel">
+
+                <div class="panel-title">
+                    🎙 AUDIO
+                </div>
+
+                <div class="audio-meter">
+
+                    <div class="meter-segment"></div>
+                    <div class="meter-segment"></div>
+                    <div class="meter-segment"></div>
+                    <div class="meter-segment"></div>
+                    <div class="meter-segment"></div>
+                    <div class="meter-segment"></div>
+                    <div class="meter-segment"></div>
+                    <div class="meter-segment"></div>
+                    <div class="meter-segment"></div>
+                    <div class="meter-segment"></div>
+                    <div class="meter-segment"></div>
+                    <div class="meter-segment"></div>
+
+                </div>
+
+                <div class="audio-label">
+                    MASTER
+                </div>
+
+            </div>
+
+
+            <!-- SYSTEM STATUS -->
+
+            <div class="system-panel">
+
+                <div class="system-item">
+
+                    <span class="system-indicator online"></span>
+
+                    <div>
+                        <small>CAM 1</small>
+                        <strong>ONLINE</strong>
+                    </div>
+
+                </div>
+
+
+                <div class="system-item">
+
+                    <span class="system-indicator waiting"></span>
+
+                    <div>
+                        <small>CAM 2</small>
+                        <strong>WAITING</strong>
+                    </div>
+
+                </div>
+
+
+                <div class="system-item">
+
+                    <span class="system-indicator online"></span>
+
+                    <div>
+                        <small>REGIE</small>
+                        <strong>CONNECTED</strong>
+                    </div>
+
+                </div>
+
+
+                <div class="system-item">
+
+                    <span class="system-indicator online"></span>
+
+                    <div>
+                        <small>WEBRTC</small>
+                        <strong>READY</strong>
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+    </main>
+
+
+    <!-- =========================================
+         NOTIFICATION
+    ========================================== -->
+
+    <div
+        class="notification"
+        id="notification">
+
+        <span class="notification-icon">
+            ✓
+        </span>
+
+        <span id="notificationText">
+            Kamera gewechselt
+        </span>
+
+    </div>
+
+
+    <!-- JAVASCRIPT -->
+
+    <script src="script.js"></script>
+
+</body>
+</html>
